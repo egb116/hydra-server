@@ -56,7 +56,7 @@ export function renderAdminPage({
 <body>
 <main>
   <h1>Subreddit Blocklist</h1>
-  <p class="muted">${count} pattern${count === 1 ? "" : "s"} active. One per line. <code>*</code> matches anything, <code>?</code> one character, case doesn't matter. <code>#</code> starts a comment.</p>
+  <p class="muted">${count} pattern${count === 1 ? "" : "s"} active. One per line. <code>*</code> matches anything, <code>?</code> one character, case doesn't matter. <code>#</code> starts a comment. Saving sorts the list and removes duplicates.</p>
   ${saved ? '<p class="saved">Saved. New feed pages use it right away.</p>' : ""}
   <form method="post" action="/blocklist">
     <label for="patterns">Patterns</label>

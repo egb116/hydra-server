@@ -30,6 +30,51 @@ export function parsePatterns(text: string): string[] {
   return [...patterns];
 }
 
+/** Sort key: the name without wildcards, so "*dank*" files under "d". */
+const sortKey = (pattern: string) => pattern.replace(/[*?]/g, "");
+
+/**
+ * Rewrites blocklist text as one pattern per line, lowercased, deduplicated
+ * and sorted alphabetically (ignoring wildcards). Whole-line comments stay at
+ * the top in their original order; a trailing comment stays with the first
+ * pattern on its line. Tokens that aren't valid patterns are dropped, the
+ * same as when matching.
+ */
+export function normalizeBlocklistText(text: string): string {
+  const headerComments: string[] = [];
+  const comments = new Map<string, string>();
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const hash = rawLine.indexOf("#");
+    const body = hash === -1 ? rawLine : rawLine.slice(0, hash);
+    const comment = hash === -1 ? "" : rawLine.slice(hash).trim();
+    const patterns = parsePatterns(body);
+
+    if (patterns.length === 0) {
+      if (comment) headerComments.push(comment);
+      continue;
+    }
+    patterns.forEach((pattern, i) => {
+      const existing = comments.get(pattern);
+      // Keep the first comment seen for a pattern that appears twice.
+      comments.set(pattern, existing || (i === 0 ? comment : ""));
+    });
+  }
+
+  const sorted = [...comments.keys()].sort((a, b) => {
+    const byName = sortKey(a).localeCompare(sortKey(b));
+    return byName !== 0 ? byName : a.localeCompare(b);
+  });
+  const lines = [
+    ...headerComments,
+    ...sorted.map((p) => {
+      const comment = comments.get(p);
+      return comment ? `${p}  ${comment}` : p;
+    }),
+  ];
+  return lines.length ? `${lines.join("\n")}\n` : "";
+}
+
 export function compilePattern(pattern: string): RegExp {
   const body = pattern
     .split("")
@@ -42,25 +87,79 @@ export function compilePattern(pattern: string): RegExp {
   return new RegExp(`^${body}$`, "i");
 }
 
+/**
+ * Matches in time that doesn't grow with the size of the list. The common
+ * shapes (exact, `abc*`, `*abc`, `*abc*`) go into hash maps keyed by their
+ * literal part. A subreddit name is at most 21 characters, so checking every
+ * prefix, suffix and substring of it is a few hundred lookups at most.
+ * Anything else (`?`, or a `*` in the middle) falls back to a regex.
+ */
 export class Blocklist {
-  private readonly compiled: { pattern: string; regex: RegExp }[];
+  private readonly exact = new Map<string, string>();
+  private readonly prefixes = new Map<string, string>();
+  private readonly suffixes = new Map<string, string>();
+  private readonly contains = new Map<string, string>();
+  private readonly regexes: { pattern: string; regex: RegExp }[] = [];
+  private matchAll: string | null = null;
+  private readonly count: number;
 
   constructor(patterns: string[]) {
-    this.compiled = patterns.map((pattern) => ({
-      pattern,
-      regex: compilePattern(pattern),
-    }));
+    const unique = new Set(patterns.map((p) => p.toLowerCase()));
+    this.count = unique.size;
+    for (const pattern of unique) {
+      // "**" means the same as "*".
+      const p = pattern.replace(/\*+/g, "*");
+      const core = p.replace(/^\*/, "").replace(/\*$/, "");
+      const starts = p.startsWith("*");
+      const ends = p.endsWith("*") && p.length > 1;
+
+      if (/[*?]/.test(core)) {
+        this.regexes.push({ pattern, regex: compilePattern(p) });
+      } else if (core === "") {
+        this.matchAll ??= pattern; // "*" blocks everything
+      } else if (starts && ends) {
+        if (!this.contains.has(core)) this.contains.set(core, pattern);
+      } else if (starts) {
+        if (!this.suffixes.has(core)) this.suffixes.set(core, pattern);
+      } else if (ends) {
+        if (!this.prefixes.has(core)) this.prefixes.set(core, pattern);
+      } else if (!this.exact.has(core)) {
+        this.exact.set(core, pattern);
+      }
+    }
   }
 
   get size() {
-    return this.compiled.length;
+    return this.count;
   }
 
-  /** Returns the first pattern that blocks this subreddit, or null. */
+  /** Returns a pattern that blocks this subreddit, or null. */
   match(subreddit: string): string | null {
-    const name = subreddit.replace(/^\/?r\//i, "").trim();
+    const name = subreddit.replace(/^\/?r\//i, "").trim().toLowerCase();
     if (!name) return null;
-    for (const { pattern, regex } of this.compiled) {
+    if (this.matchAll) return this.matchAll;
+
+    const exact = this.exact.get(name);
+    if (exact) return exact;
+
+    const n = name.length;
+    if (this.prefixes.size || this.suffixes.size) {
+      for (let len = 1; len <= n; len++) {
+        const prefix = this.prefixes.get(name.slice(0, len));
+        if (prefix) return prefix;
+        const suffix = this.suffixes.get(name.slice(n - len));
+        if (suffix) return suffix;
+      }
+    }
+    if (this.contains.size) {
+      for (let start = 0; start < n; start++) {
+        for (let end = start + 1; end <= n; end++) {
+          const hit = this.contains.get(name.slice(start, end));
+          if (hit) return hit;
+        }
+      }
+    }
+    for (const { pattern, regex } of this.regexes) {
       if (regex.test(name)) return pattern;
     }
     return null;

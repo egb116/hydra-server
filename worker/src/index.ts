@@ -8,7 +8,11 @@
  * of an AI model. AI summaries, push notifications and the dashboard from
  * the Bun server are not implemented here.
  */
-import { Blocklist, parsePatterns } from "./blocklist";
+import {
+  Blocklist,
+  normalizeBlocklistText,
+  parsePatterns,
+} from "./blocklist";
 import { renderAdminPage } from "./admin";
 import { verifyAccessJwt } from "./access";
 
@@ -60,19 +64,35 @@ async function filterPosts(req: Request, env: Env): Promise<Response> {
   }
   if (!Array.isArray(body.posts)) return text("posts must be an array", 400);
 
-  const patterns = new Set(parsePatterns(await loadBlocklistText(env)));
-  if (typeof body.filterDescription === "string") {
-    for (const p of parsePatterns(body.filterDescription)) patterns.add(p);
-  }
-  const blocklist = new Blocklist([...patterns]);
+  const saved = await getSavedBlocklist(env);
+  const fromApp =
+    typeof body.filterDescription === "string"
+      ? new Blocklist(parsePatterns(body.filterDescription))
+      : null;
 
   const result: Record<string, boolean> = {};
   for (const post of body.posts as IncomingPost[]) {
     if (typeof post?.id !== "string") continue;
     const subreddit = typeof post.subreddit === "string" ? post.subreddit : "";
-    result[post.id] = blocklist.match(subreddit) !== null;
+    result[post.id] =
+      saved.match(subreddit) !== null ||
+      (fromApp !== null && fromApp.match(subreddit) !== null);
   }
   return json(result);
+}
+
+/**
+ * The saved list can hold thousands of patterns, so it's compiled once per
+ * Worker instance and only rebuilt when the stored text changes.
+ */
+let savedCache: { text: string; blocklist: Blocklist } | null = null;
+
+async function getSavedBlocklist(env: Env): Promise<Blocklist> {
+  const text = await loadBlocklistText(env);
+  if (savedCache?.text !== text) {
+    savedCache = { text, blocklist: new Blocklist(parsePatterns(text)) };
+  }
+  return savedCache.blocklist;
 }
 
 async function blocklistPage(req: Request, env: Env): Promise<Response> {
@@ -91,7 +111,7 @@ async function blocklistPage(req: Request, env: Env): Promise<Response> {
   let saved = false;
   if (req.method === "POST") {
     const form = await req.formData();
-    const value = String(form.get("patterns") ?? "");
+    const value = normalizeBlocklistText(String(form.get("patterns") ?? ""));
     await env.BLOCKLIST.put(BLOCKLIST_KEY, value);
     saved = true;
   }

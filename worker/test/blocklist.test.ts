@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Blocklist, parsePatterns } from "../src/blocklist.ts";
+import { Blocklist, compilePattern, parsePatterns } from "../src/blocklist.ts";
 
 test("prefix wildcard", () => {
   const list = new Blocklist(["okbuddy*"]);
@@ -53,4 +53,52 @@ test("regex characters in patterns are literal", () => {
 
 test("empty subreddit never matches", () => {
   assert.equal(new Blocklist(["*"]).match(""), null);
+});
+
+import { normalizeBlocklistText } from "../src/blocklist.ts";
+
+test("normalize sorts by name ignoring wildcards and dedupes", () => {
+  assert.equal(
+    normalizeBlocklistText("*zzz*\nOkBuddy*\n*dank*\nokbuddy*\n*Dank*, memes\n\n"),
+    "*dank*\nmemes\nokbuddy*\n*zzz*\n",
+  );
+});
+
+test("normalize keeps comments", () => {
+  assert.equal(
+    normalizeBlocklistText("# my list\nzeta  # last\nalpha\nzeta\n# second note"),
+    "# my list\n# second note\nalpha\nzeta  # last\n",
+  );
+});
+
+test("normalize of empty text is empty", () => {
+  assert.equal(normalizeBlocklistText("  \n\n"), "");
+});
+
+test("suffix, mid-wildcard, doubled stars and catch-all", () => {
+  const list = new Blocklist(["*porn", "a*z", "**cats**"]);
+  assert.equal(list.match("EarthPorn"), "*porn");
+  assert.equal(list.match("pornography"), null);
+  assert.equal(list.match("abcz"), "a*z");
+  assert.equal(list.match("abcza"), null);
+  assert.equal(list.match("SadCatsClub"), "**cats**");
+  assert.equal(new Blocklist(["*"]).match("anything"), "*");
+});
+
+test("matches agree with a plain regex check on random input", () => {
+  const alphabet = "abc";
+  const rand = (len: number) =>
+    Array.from({ length: len }, () => alphabet[Math.floor(Math.random() * 3)]).join("");
+  const patterns = Array.from({ length: 40 }, () => {
+    const core = rand(1 + Math.floor(Math.random() * 3));
+    return [core, `${core}*`, `*${core}`, `*${core}*`, `${core}?`, `${core}*${rand(1)}`][
+      Math.floor(Math.random() * 6)
+    ]!;
+  });
+  const list = new Blocklist(patterns);
+  for (let i = 0; i < 500; i++) {
+    const name = rand(1 + Math.floor(Math.random() * 8));
+    const expected = patterns.some((p) => compilePattern(p).test(name));
+    assert.equal(list.match(name) !== null, expected, `${name} vs ${patterns.join(",")}`);
+  }
 });
