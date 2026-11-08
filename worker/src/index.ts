@@ -10,11 +10,14 @@
  */
 import { Blocklist, parsePatterns } from "./blocklist";
 import { renderAdminPage } from "./admin";
+import { verifyAccessJwt } from "./access";
 
 export interface Env {
   BLOCKLIST: KVNamespace;
-  /** Password for the /blocklist page. Set with `wrangler secret put`. */
-  ADMIN_PASSWORD?: string;
+  /** Cloudflare Access team domain, e.g. "yourteam.cloudflareaccess.com". */
+  ACCESS_TEAM_DOMAIN?: string;
+  /** Audience (AUD) tag of the Access application protecting /blocklist. */
+  ACCESS_AUD?: string;
 }
 
 const BLOCKLIST_KEY = "blocklist";
@@ -72,41 +75,18 @@ async function filterPosts(req: Request, env: Env): Promise<Response> {
   return json(result);
 }
 
-async function sha256(value: string): Promise<ArrayBuffer> {
-  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-}
-
-/** HTTP Basic auth; any username, password must equal ADMIN_PASSWORD. */
-async function isAuthorized(req: Request, env: Env): Promise<boolean> {
-  if (!env.ADMIN_PASSWORD) return false;
-  const header = req.headers.get("Authorization") ?? "";
-  if (!header.startsWith("Basic ")) return false;
-  let decoded: string;
-  try {
-    decoded = atob(header.slice("Basic ".length));
-  } catch (_e) {
-    return false;
-  }
-  const password = decoded.slice(decoded.indexOf(":") + 1);
-  const [a, b] = await Promise.all([
-    sha256(password),
-    sha256(env.ADMIN_PASSWORD),
-  ]);
-  return crypto.subtle.timingSafeEqual(a, b);
-}
-
 async function blocklistPage(req: Request, env: Env): Promise<Response> {
-  if (!env.ADMIN_PASSWORD) {
+  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
     return text(
-      "Set a password first: npx wrangler secret put ADMIN_PASSWORD",
+      "Cloudflare Access is not configured: set ACCESS_TEAM_DOMAIN and ACCESS_AUD in wrangler.jsonc",
       503,
     );
   }
-  if (!(await isAuthorized(req, env))) {
-    return text("Authentication required", 401, {
-      "WWW-Authenticate": 'Basic realm="Hydra blocklist", charset="UTF-8"',
-    });
-  }
+  const identity = await verifyAccessJwt(
+    req.headers.get("Cf-Access-Jwt-Assertion"),
+    { teamDomain: env.ACCESS_TEAM_DOMAIN, aud: env.ACCESS_AUD },
+  );
+  if (!identity) return text("Forbidden", 403);
 
   let saved = false;
   if (req.method === "POST") {

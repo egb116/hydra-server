@@ -20,25 +20,29 @@ Matching ignores case. Patterns go one per line (commas or spaces also work). A 
 
 The list comes from two places, and both are applied:
 
-1. The **/blocklist** page on the Worker, which needs a password and is saved in Workers KV.
+1. The **/blocklist** page on the Worker, which sits behind Cloudflare Access and is saved in Workers KV.
 2. Anything typed in the app under **Settings → Filters → Smart Post Filter**.
 
 ## Setup
 
-1. **Cloudflare credentials for GitHub Actions.** In Cloudflare, create an API token from the *Edit Cloudflare Workers* template. In this repo, go to **Settings → Secrets and variables → Actions** and add:
-   - `CLOUDFLARE_API_TOKEN`
-   - `CLOUDFLARE_ACCOUNT_ID` (shown on the Workers & Pages overview page)
-2. **Deploy.** Pushing to `main` with changes under `worker/` runs tests and deploys. You can also run **Actions → Deploy Worker → Run workflow**. The first deploy creates the `BLOCKLIST` KV namespace.
-3. **Set the page password:** `cd worker && npx wrangler secret put ADMIN_PASSWORD`, or add it as a secret under the Worker's Settings in the Cloudflare dashboard.
-4. **Point the app at the Worker.** Go to Settings → Advanced → Use Custom Server and enter `https://hydra-server.<your-subdomain>.workers.dev`.
+The Worker is served only at `hydra.ericbowers.org`. The `*.workers.dev` URL and preview URLs are turned off in `wrangler.jsonc`.
+
+1. **Cloudflare credentials for GitHub Actions.** In Cloudflare, create an API token from the *Edit Cloudflare Workers* template. Add it to this repo under **Settings → Secrets and variables → Actions** as `CLOUDFLARE_API_TOKEN`, along with `CLOUDFLARE_ACCOUNT_ID`.
+2. **Deploy.** Pushing to `main` with changes under `worker/` runs tests and deploys. You can also run **Actions → Deploy Worker → Run workflow**.
+3. **Protect the page with Cloudflare Access.** In Zero Trust → Access → Applications, add a *Self-hosted* application:
+   - Domain `hydra.ericbowers.org`, path `blocklist`. Protect only that path: the app has to reach `/api/*` without signing in.
+   - A policy that allows your email.
+
+   Then put the team domain (`<team>.cloudflareaccess.com`) and the application's AUD tag into `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` in `wrangler.jsonc`, and redeploy. The Worker checks the token Access signs, so the page stays locked even if the Access application is removed.
+4. **Point the app at the Worker.** Go to Settings → Advanced → Use Custom Server and enter `https://hydra.ericbowers.org`.
 5. **Turn on filtering in the app.** The Smart Post Filter text box must not be empty, or the app never asks the server. Patterns typed there count too.
 
-Edit the list at `https://hydra-server.<your-subdomain>.workers.dev/blocklist` (any username, your password).
+Edit the list at `https://hydra.ericbowers.org/blocklist`.
 
 ## Notes
 
 - The app applies this filter on every posts page, including a single subreddit's own page. If you open a blocked subreddit directly, it will look empty.
-- Local development: `npm install`, put `ADMIN_PASSWORD=...` in `worker/.dev.vars`, then `npm run dev`. Run `npm test` for the matcher tests.
+- Local development: `npm install`, then `npm run dev`. Without a real Access token the /blocklist page refuses requests, so test the matcher with `npm test`.
 
 ## Upstream updates
 
