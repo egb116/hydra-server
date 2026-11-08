@@ -1,0 +1,49 @@
+# Keeps this fork's main branch merged with dmilin1/hydra-server.
+# The Cloudflare Worker lives entirely in worker/, which upstream never
+# touches, so these merges normally go through without conflicts.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "17 9 * * *" # daily
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    if: github.repository != 'dmilin1/hydra-server'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge upstream into main
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          out=$(gh api -X POST "repos/${{ github.repository }}/merge-upstream" -f branch=main 2>&1)
+          status=$?
+          echo "$out"
+          {
+            echo "output<<EOF"
+            echo "$out"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit $status
+
+      - name: Open an issue if the merge failed
+        if: failure() && steps.merge.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTPUT: ${{ steps.merge.outputs.output }}
+        run: |
+          title="Upstream sync needs attention"
+          existing=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$title\"" --json number -q '.[0].number')
+          body=$(printf 'The daily merge from dmilin1/hydra-server failed.\n\n```\n%s\n```\n\nIf upstream changed files under .github/workflows, GitHub does not let the Actions token push them: press **Sync fork** on the repo page instead. If there is a merge conflict, merge `upstream/main` locally and resolve it.\n\nRun: %s/%s/actions/runs/%s' "$OUTPUT" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" -R "${{ github.repository }}" --body "$body"
+          else
+            gh issue create -R "${{ github.repository }}" --title "$title" --body "$body"
+          fi

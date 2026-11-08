@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hydra-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  // No id: wrangler creates the KV namespace on the first deploy and reuses
+  // it after that.
+  "kv_namespaces": [{ "binding": "BLOCKLIST" }]
+}
