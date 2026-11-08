@@ -19,8 +19,8 @@
     // The /blocklist page only opens for requests that Cloudflare Access has
     // signed. Fill these in from Zero Trust > Access > Applications.
     // Team domain, e.g. "yourteam.cloudflareaccess.com".
-    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_TEAM_DOMAIN": "bowers.cloudflareaccess.com",
     // The application's "Application Audience (AUD) Tag".
-    "ACCESS_AUD": ""
+    "ACCESS_AUD": "e2a1053d555ecacf968bdd669569bb9ca2dce42820248f7977a7b3eb86f01508"
   }
 }
