@@ -4,7 +4,7 @@ import { Blocklist, parsePatterns } from "../src/blocklist.ts";
 
 test("prefix wildcard", () => {
   const list = new Blocklist(["okbuddy*"]);
-  assert.equal(list.match("OkBuddyRetard"), "okbuddy*");
+  assert.equal(list.match("OkBuddyBaka"), "okbuddy*");
   assert.equal(list.match("okbuddy"), "okbuddy*");
   assert.equal(list.match("NotOkBuddy"), null);
 });

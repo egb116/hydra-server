@@ -66,7 +66,7 @@ export function renderAdminPage({
   <form method="get" action="/blocklist">
     <label for="test">Test a subreddit</label>
     <div class="row">
-      <input id="test" name="test" type="text" autocapitalize="off" autocorrect="off" placeholder="OkBuddyRetard" value="${escapeHtml(test?.name ?? "")}">
+      <input id="test" name="test" type="text" autocapitalize="off" autocorrect="off" placeholder="AskReddit" value="${escapeHtml(test?.name ?? "")}">
       <button type="submit">Check</button>
     </div>
     ${testResult}

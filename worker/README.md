@@ -11,7 +11,7 @@ AI summaries, push notifications, and the Bun dashboard are not included. Those 
 
 | Pattern | Blocks |
 |---|---|
-| `OkBuddy*` | r/OkBuddyRetard, r/okbuddybaka, ... |
+| `OkBuddy*` | r/OkBuddyBaka, r/okbuddyphd, ... |
 | `*zzz*` | any subreddit with `zzz` in its name |
 | `memes` | r/memes only (no wildcard means exact) |
 | `gif?` | r/gifs, r/gifz (`?` is one character) |

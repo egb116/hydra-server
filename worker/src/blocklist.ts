@@ -1,7 +1,7 @@
 /**
  * Subreddit blocklist with wildcard patterns.
  *
- *   OkBuddy*   matches r/OkBuddyRetard, r/okbuddybaka, ...
+ *   OkBuddy*   matches r/OkBuddyBaka, r/okbuddyphd, ...
  *   *zzz*      matches any subreddit with "zzz" anywhere in its name
  *   memes      matches exactly r/memes (and nothing else)
  *   ?          matches exactly one character
