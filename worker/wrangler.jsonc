@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hydra-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+
+  // Served only at the custom domain: no *.workers.dev URL and no
+  // per-version preview URLs.
+  "routes": [{ "pattern": "hydra.ericbowers.org", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // No id: wrangler creates the KV namespace on the first deploy and reuses
+  // it after that.
+  "kv_namespaces": [{ "binding": "BLOCKLIST" }],
+
+  "vars": {
+    // The /blocklist page only opens for requests that Cloudflare Access has
+    // signed. Fill these in from Zero Trust > Access > Applications.
+    // Team domain, e.g. "yourteam.cloudflareaccess.com".
+    "ACCESS_TEAM_DOMAIN": "bowers.cloudflareaccess.com",
+    // The application's "Application Audience (AUD) Tag".
+    "ACCESS_AUD": "e2a1053d555ecacf968bdd669569bb9ca2dce42820248f7977a7b3eb86f01508"
+  }
+}
