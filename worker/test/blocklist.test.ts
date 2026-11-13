@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Blocklist, compilePattern, parsePatterns } from "../src/blocklist.ts";
+import {
+  Blocklist,
+  compilePattern,
+  normalizeBlocklistText,
+  parsePatterns,
+} from "../src/blocklist.ts";
 
 test("prefix wildcard", () => {
   const list = new Blocklist(["okbuddy*"]);
@@ -55,7 +60,6 @@ test("empty subreddit never matches", () => {
   assert.equal(new Blocklist(["*"]).match(""), null);
 });
 
-import { normalizeBlocklistText } from "../src/blocklist.ts";
 
 test("normalize sorts by name ignoring wildcards and dedupes", () => {
   assert.equal(
@@ -101,4 +105,13 @@ test("matches agree with a plain regex check on random input", () => {
     const expected = patterns.some((p) => compilePattern(p).test(name));
     assert.equal(list.match(name) !== null, expected, `${name} vs ${patterns.join(",")}`);
   }
+});
+
+test("uppercase patterns from the saved page match mixed-case names", () => {
+  const list = new Blocklist(
+    parsePatterns(normalizeBlocklistText("*ZZZ*\n*mains*\n")),
+  );
+  assert.equal(list.match("CissiaMainsZZZ"), "*mains*");
+  assert.equal(list.match("SleepyZZZ"), "*zzz*");
+  assert.equal(list.match("CipherMainsHSR_"), "*mains*");
 });

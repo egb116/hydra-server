@@ -71,13 +71,37 @@ async function filterPosts(req: Request, env: Env): Promise<Response> {
       : null;
 
   const result: Record<string, boolean> = {};
+  const hidden: string[] = [];
+  const kept: string[] = [];
+  let skipped = 0;
   for (const post of body.posts as IncomingPost[]) {
-    if (typeof post?.id !== "string") continue;
+    if (typeof post?.id !== "string") {
+      skipped++;
+      continue;
+    }
     const subreddit = typeof post.subreddit === "string" ? post.subreddit : "";
-    result[post.id] =
-      saved.match(subreddit) !== null ||
-      (fromApp !== null && fromApp.match(subreddit) !== null);
+    const hit = saved.match(subreddit) ?? fromApp?.match(subreddit) ?? null;
+    result[post.id] = hit !== null;
+    (hit ? hidden : kept).push(hit ? `${subreddit} (${hit})` : subreddit);
   }
+
+  // One line per request, visible with `wrangler tail` or in the dashboard's
+  // Workers logs, so it's possible to see what the app actually sent.
+  console.log(
+    JSON.stringify({
+      event: "filterPosts",
+      posts: body.posts.length,
+      skippedWithoutId: skipped,
+      savedPatterns: saved.size,
+      appPatterns: fromApp?.size ?? 0,
+      hidden,
+      kept,
+      firstPostFields:
+        body.posts[0] && typeof body.posts[0] === "object"
+          ? Object.keys(body.posts[0])
+          : typeof body.posts[0],
+    }),
+  );
   return json(result);
 }
 
