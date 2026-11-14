@@ -56,7 +56,9 @@ export class DiscordAlerter implements Alerter {
       const res = await this.options.fetch(this.options.webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
+        // Never ping anyone: messages can carry outside text (errors, commit titles)
+        // that may contain @everyone or a user mention.
+        body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
         timeoutMs: TIMEOUT_MS,
       });
       delivered = res.ok;

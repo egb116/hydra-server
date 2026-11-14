@@ -3,7 +3,8 @@ import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { ConfigError } from "../src/config";
-import { startServer } from "../src/main";
+import { liveMessage, startServer } from "../src/main";
+import { SERVER_VERSION } from "../src/version";
 import { rejection, TEST_KEY, tempDir } from "./helpers";
 
 let dir: string;
@@ -13,6 +14,24 @@ beforeEach(() => {
   ({ dir, cleanup } = tempDir());
 });
 afterEach(() => cleanup());
+
+describe("liveMessage", () => {
+  test("without deploy details (manual deploys, self-hosted servers)", () => {
+    expect(liveMessage({ mode: "official", deployment: { commit: null, commitTitle: null } })).toBe(
+      `Hydra server is live (${SERVER_VERSION}, official mode)`,
+    );
+  });
+
+  test("a long commit title is cut short", () => {
+    const message = liveMessage({
+      mode: "official",
+      deployment: { commit: "abcdef1234567", commitTitle: "x".repeat(500) },
+    });
+    expect(message).toBe(
+      `Hydra server is live (${SERVER_VERSION}, official mode, commit abcdef1): ${"x".repeat(200)}`,
+    );
+  });
+});
 
 describe("startServer", () => {
   test("boots, serves, and shuts down gracefully", async () => {
@@ -83,6 +102,53 @@ describe("startServer", () => {
       const { content } = JSON.parse(posts[0] ?? "{}") as { content: string };
       expect(content).toStartWith("Boot failed, the server is not running:");
       expect(content).toContain("sqlite.db.daily.bak");
+    } finally {
+      discord.close();
+    }
+  });
+
+  // The operator learns about every deploy (and restart) from Discord.
+  test("a successful boot posts a 'live' message with the deployed commit", async () => {
+    const posts: string[] = [];
+    const discord = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk: Buffer) => (body += chunk.toString()));
+      req.on("end", () => {
+        posts.push(body);
+        res.writeHead(204).end();
+      });
+    });
+    await new Promise<void>((resolve) => discord.listen(0, "127.0.0.1", resolve));
+    const address = discord.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    try {
+      const running = await startServer({
+        env: {
+          HYDRA_MODE: "selfhost",
+          ENCRYPTION_KEY: TEST_KEY,
+          DATABASE_PATH: join(dir, "sqlite.db"),
+          PORT: "0",
+          DISCORD_WEBHOOK_URL: `http://127.0.0.1:${port}/webhook`,
+          HYDRA_COMMIT: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+          HYDRA_COMMIT_TITLE: "Update dependency zod to v4.5.0 @everyone",
+        },
+        logSink: () => {},
+      });
+      try {
+        for (let i = 0; i < 100 && posts.length === 0; i++) await Bun.sleep(20);
+        expect(posts).toHaveLength(1);
+        const body = JSON.parse(posts[0] ?? "{}") as {
+          content: string;
+          allowed_mentions: unknown;
+        };
+        expect(body.content).toBe(
+          `Hydra server is live (${SERVER_VERSION}, selfhost mode, commit 1a2b3c4): Update dependency zod to v4.5.0 @everyone`,
+        );
+        // The commit title is outside text: it must never ping the channel.
+        expect(body.allowed_mentions).toEqual({ parse: [] });
+      } finally {
+        await running.shutdown("test");
+      }
     } finally {
       discord.close();
     }

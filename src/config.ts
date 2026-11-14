@@ -48,6 +48,11 @@ export interface Config {
   readonly logLevel: LogLevel;
   /** See src/http/clientIp.ts. */
   readonly trustProxy: TrustProxy;
+  /** What was deployed. The deploy workflow sets these; otherwise they're null. */
+  readonly deployment: {
+    readonly commit: string | null;
+    readonly commitTitle: string | null;
+  };
   /** Non-fatal problems to log at boot. */
   readonly warnings: readonly string[];
 }
@@ -119,6 +124,9 @@ const envSchema = z.object({
   ),
   /** Set by Fly on every machine. */
   FLY_APP_NAME: optionalString,
+  /** Set by .github/workflows/deploy.yml. Free text on purpose: a bad value must never block a boot. */
+  HYDRA_COMMIT: optionalString,
+  HYDRA_COMMIT_TITLE: optionalString,
   LOG_LEVEL: blank(z.enum(["debug", "info", "warn", "error"]), (v) => v.toLowerCase()),
 });
 
@@ -241,6 +249,10 @@ export function loadConfig(env: Env): Config {
     pollConcurrency: e.POLL_CONCURRENCY ?? 32,
     logLevel: e.LOG_LEVEL ?? "info",
     trustProxy: e.TRUST_PROXY ?? (e.FLY_APP_NAME ? "fly" : "none"),
+    deployment: {
+      commit: e.HYDRA_COMMIT ?? null,
+      commitTitle: e.HYDRA_COMMIT_TITLE ?? null,
+    },
     warnings,
   };
   return deepFreeze(config);

@@ -3,7 +3,7 @@
  * modules → app → Bun.serve → jobs and workers → graceful shutdown.
  */
 import { existsSync, statSync } from "node:fs";
-import { ConfigError, type Env, loadConfig } from "./config";
+import { type Config, ConfigError, type Env, loadConfig } from "./config";
 import { backupDatabase, dailyBackupPath } from "./db/backup";
 import { openDatabase } from "./db/connection";
 import { buildApp } from "./http/app";
@@ -26,6 +26,20 @@ const SHUTDOWN_DEADLINE_MS = 25_000;
 const HTTP_DRAIN_MS = 10_000;
 /** How long a crash waits for its Discord alert before shutting down. */
 const ALERT_ON_CRASH_MS = 3_000;
+const MAX_COMMIT_TITLE_CHARS = 200;
+
+/**
+ * The Discord message sent once the server is up, so every deploy and restart
+ * is visible. For example: "Hydra server is live (2.0.0, official mode,
+ * commit 1a2b3c4): Update dependency zod to v4.5.0".
+ */
+export function liveMessage(config: Pick<Config, "mode" | "deployment">): string {
+  const { commit, commitTitle } = config.deployment;
+  const details = [SERVER_VERSION, `${config.mode} mode`];
+  if (commit) details.push(`commit ${commit.slice(0, 7)}`);
+  const title = commitTitle ? `: ${commitTitle.slice(0, MAX_COMMIT_TITLE_CHARS)}` : "";
+  return `Hydra server is live (${details.join(", ")})${title}`;
+}
 
 export interface StartOptions {
   env: Env;
@@ -127,6 +141,8 @@ export async function startServer(options: StartOptions): Promise<RunningServer>
 
   for (const module of modules) await module.start?.();
   jobs.start();
+  // Each process has its own alerter, so the 1 h dedupe never hides a restart.
+  void alerter.alert("server-live", liveMessage(config));
 
   let stopping: Promise<void> | null = null;
   const shutdown = (reason: string): Promise<void> => {
