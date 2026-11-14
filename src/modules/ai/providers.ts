@@ -4,7 +4,8 @@
  */
 import { createGroq } from "@ai-sdk/groq";
 import { createOpenAI } from "@ai-sdk/openai";
-import type { EmbeddingModel, LanguageModel } from "ai";
+import { createTypeSafeAi } from "@ai-sdk/typesafe-ai";
+import type { EmbeddingModel, Experimental_DecisionModel, LanguageModel } from "ai";
 import type { Config } from "../../config";
 import { Unavailable } from "../../lib/errors";
 import type { OutboundFetch, OutboundInit } from "../../lib/http";
@@ -47,6 +48,8 @@ export interface AiModelFactory {
   languageModel(entry: ModelEntry): LanguageModel;
   /** Throws Unavailable when OPENAI_API_KEY is missing. */
   embeddingModel(entry: ModelEntry): EmbeddingModel;
+  /** Throws Unavailable when TYPESAFE_AI_API_KEY is missing. */
+  decisionModel(entry: ModelEntry): Experimental_DecisionModel;
 }
 
 export const AI_NOT_CONFIGURED = "AI is not configured on this server";
@@ -57,11 +60,14 @@ export const EMBEDDINGS_NOT_CONFIGURED = "Embeddings are not configured on this 
  * its own request timeout baked into its fetch adapter.
  */
 export function createProviderModelFactory(
-  ai: Pick<Config["ai"], "groqApiKey" | "openaiApiKey" | "openaiBaseUrl">,
+  ai: Pick<Config["ai"], "groqApiKey" | "openaiApiKey" | "openaiBaseUrl"> & {
+    typesafeApiKey?: string | null;
+  },
   fetch: OutboundFetch,
 ): AiModelFactory {
   const languageCache = new Map<AiFeature, LanguageModel>();
   const embeddingCache = new Map<AiFeature, EmbeddingModel>();
+  const decisionCache = new Map<AiFeature, Experimental_DecisionModel>();
   return {
     languageModel(entry) {
       const cached = languageCache.get(entry.feature);
@@ -96,6 +102,17 @@ export function createProviderModelFactory(
         fetch: toProviderFetch(fetch, entry.timeoutMs),
       }).embedding(entry.modelId);
       embeddingCache.set(entry.feature, model);
+      return model;
+    },
+    decisionModel(entry) {
+      const cached = decisionCache.get(entry.feature);
+      if (cached) return cached;
+      if (!ai.typesafeApiKey) throw new Unavailable(AI_NOT_CONFIGURED);
+      const model = createTypeSafeAi({
+        apiKey: ai.typesafeApiKey,
+        fetch: toProviderFetch(fetch, entry.timeoutMs),
+      }).decisionModel(entry.modelId);
+      decisionCache.set(entry.feature, model);
       return model;
     },
   };

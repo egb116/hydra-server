@@ -36,6 +36,13 @@ export interface AiCallOutcome<T> {
   usage?: TokenUsage | null;
   /** Recorded in ai_calls.status. Default "ok". */
   status?: string;
+  /**
+   * Set when the call answered but mostly failed underneath (for example most
+   * of a batch's provider calls errored and failed open). The request still
+   * succeeds, but this counts as a failure toward the failure-rate alert and
+   * is recorded in ai_calls.error, so a partial outage isn't silent.
+   */
+  degraded?: string;
 }
 
 /**
@@ -272,7 +279,20 @@ export function createAiGateway(
       let errorText: string | null = null;
       try {
         const outcome = await call({ entry, signal });
-        failureRate.succeeded(`ai-failures:${feature}`);
+        if (outcome.degraded) {
+          errorText = outcome.degraded;
+          deps.log.warn("ai call degraded", {
+            feature,
+            model: entry.modelId,
+            error: outcome.degraded,
+          });
+          failureRate.failed(
+            `ai-failures:${feature}`,
+            `AI ${feature} mostly failed (${entry.modelId}): ${outcome.degraded}`,
+          );
+        } else {
+          failureRate.succeeded(`ai-failures:${feature}`);
+        }
         status = outcome.status ?? "ok";
         usage = outcome.usage ?? null;
         return outcome.value;

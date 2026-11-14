@@ -232,10 +232,21 @@ export interface PostClassifier {
   readonly name: string;
   /** Returns the indices to HIDE. On partial failure, prefer returning fewer (fail open). */
   classify(
-    input: { description: string; posts: readonly ClassifierPost[] },
+    input: {
+      description: string;
+      posts: readonly ClassifierPost[];
+      /**
+       * 0 to 1, higher hides more. Classifiers that score posts hide those
+       * whose score is above 1 - sensitivity; a yes/no classifier ignores it.
+       * Absent means the default (DEFAULT_FILTER_SENSITIVITY).
+       */
+      sensitivity?: number;
+    },
     signal: AbortSignal,
   ): Promise<{
     hide: Set<number>;
     usage?: { inputTokens: number; outputTokens: number };
+    /** Per post, the estimated probability that it matches the description, when the classifier has one. */
+    scores?: Map<number, number>;
   }>;
 }

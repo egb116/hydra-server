@@ -4,14 +4,23 @@
  */
 import type { Deps, Module } from "../../types";
 import type { EntitlementService, PostClassifier } from "../contracts";
-import { LlmPostClassifier } from "./classifier";
+import { JevPostClassifier, LlmPostClassifier } from "./classifier";
 import { createAiGateway, type FreeLimit } from "./gateway";
 import { type AiModelFactory, createProviderModelFactory } from "./providers";
 import { type AiFeature, buildAiRegistry } from "./registry";
 import { registerAiRoutes, totalTimeoutMs } from "./routes";
 import { pruneCalls } from "./usage";
 
-export { LlmPostClassifier, parseHideLenient, sanitizeHide, toClassifierPosts } from "./classifier";
+export {
+  DEFAULT_FILTER_SENSITIVITY,
+  hideThreshold,
+  JEV_BATCH_SIZE,
+  JevPostClassifier,
+  LlmPostClassifier,
+  parseHideLenient,
+  sanitizeHide,
+  toClassifierPosts,
+} from "./classifier";
 export {
   AiCallError,
   createAiGateway,
@@ -20,14 +29,20 @@ export {
   normalizeUsage,
 } from "./gateway";
 export { createProviderModelFactory, toProviderFetch } from "./providers";
-export { AiRegistryError, buildAiRegistry, costUsd, DEFAULT_MODELS } from "./registry";
+export {
+  AiRegistryError,
+  buildAiRegistry,
+  costUsd,
+  DEFAULT_MODELS,
+  JEV_MODEL_ID,
+} from "./registry";
 
 export interface AiModuleOptions {
   entitlements: EntitlementService;
   /**
-   * The filterPosts backend. Defaults to an LlmPostClassifier over the
-   * registry's filter model. This is where a decision-model backend (Jev, or
-   * the OpenAI Decisions API) plugs in once it has a config switch.
+   * The filterPosts backend. Defaults to a JevPostClassifier when
+   * TYPESAFE_AI_API_KEY is set, otherwise an LlmPostClassifier over the
+   * registry's filter model.
    */
   classifier?: PostClassifier;
   /** Builds ai-sdk models. Defaults to the real providers over deps.fetch. Tests inject mocks. */
@@ -67,18 +82,30 @@ export function createAiModule(deps: Deps, options: AiModuleOptions): Module {
     ...(options.freeBudgetShares ? { freeBudgetShares: options.freeBudgetShares } : {}),
   });
 
+  const filterEntry = registry.filterPosts;
+  log.info("filterPosts classifier", {
+    module: "ai",
+    classifier: filterEntry.kind === "decision" ? "jev" : "llm",
+    model: filterEntry.modelId,
+  });
+
   let defaultClassifier: PostClassifier | null = null;
   const classifier = (): PostClassifier => {
     if (options.classifier) return options.classifier;
     if (!defaultClassifier) {
-      const entry = registry.filterPosts;
-      defaultClassifier = new LlmPostClassifier({
-        // Throws Unavailable (503) without an API key; retried on the next request.
-        model: models.languageModel(entry),
-        maxOutputTokens: entry.maxOutputTokens ?? 2_000,
-        providerOptions: entry.providerOptions,
-        timeoutMs: totalTimeoutMs(entry),
-      });
+      // Each throws Unavailable (503) without an API key; retried on the next request.
+      defaultClassifier =
+        filterEntry.kind === "decision"
+          ? new JevPostClassifier({
+              model: models.decisionModel(filterEntry),
+              timeoutMs: totalTimeoutMs(filterEntry),
+            })
+          : new LlmPostClassifier({
+              model: models.languageModel(filterEntry),
+              maxOutputTokens: filterEntry.maxOutputTokens ?? 2_000,
+              providerOptions: filterEntry.providerOptions,
+              timeoutMs: totalTimeoutMs(filterEntry),
+            });
     }
     return defaultClassifier;
   };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEFAULT_FREE_LIMITS } from "../../../src/modules/ai";
+import { DEFAULT_FREE_LIMITS, JEV_MODEL_ID } from "../../../src/modules/ai";
 import { type TestDeps, testDeps } from "../../helpers";
 import {
   aiApp,
@@ -10,6 +10,9 @@ import {
   openaiEmbedding,
   post,
   PRO_CUSTOMER,
+  TYPESAFE_DECIDE_URL,
+  type TypeSafeRequest,
+  typesafeDecisions,
 } from "../../helpers/ai";
 
 const KEYS = { GROQ_API_KEY: "gsk-test", OPENAI_API_KEY: "sk-test" };
@@ -502,6 +505,216 @@ describe("POST /api/ai/filterPosts", () => {
   });
 });
 
+/** The bodies sent to TypeSafe's decision endpoint. */
+function sentToTypeSafe(d: TestDeps): TypeSafeRequest[] {
+  return d.fetch.calls
+    .filter((c) => c.url === TYPESAFE_DECIDE_URL)
+    .map((c) => JSON.parse(c.body ?? "{}") as TypeSafeRequest);
+}
+
+describe("POST /api/ai/filterPosts on Jev (TYPESAFE_AI_API_KEY set)", () => {
+  const JEV = { TYPESAFE_AI_API_KEY: "ts-test" };
+  // P(match) per title: clearly not, clearly yes, borderline yes.
+  const probabilities = { "My cat": 0.02, "Election results": 0.97, "Senate passes bill": 0.55 };
+
+  test("a page is one decision call; without a sensitivity (old apps) P > 0.5 is hidden", async () => {
+    const d = await setup(JEV);
+    d.fetch.on("POST", TYPESAFE_DECIDE_URL, typesafeDecisions(probabilities, 120));
+    const { app } = aiApp(d);
+    const res = await post(app, "/api/ai/filterPosts", filterBody);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ a1: false, b2: true, c3: true });
+
+    // Only TypeSafe was called, once, with the pinned model.
+    expect(d.fetch.calls.map((c) => c.url)).toEqual([TYPESAFE_DECIDE_URL]);
+    expect(d.fetch.calls[0]!.headers.get("authorization")).toBe("Bearer ts-test");
+    const [request] = sentToTypeSafe(d);
+    expect(request!.model).toBe(JEV_MODEL_ID);
+    // The description once, then the posts by server-assigned number.
+    expect(request!.state).toEqual({
+      filter_description: "posts about politics",
+      posts: [
+        // An empty text is left out rather than sent empty.
+        { number: 0, subreddit: "pics", title: "My cat" },
+        { number: 1, subreddit: "politics", title: "Election results", text: "The vote..." },
+        { number: 2, subreddit: "news", title: "Senate passes bill" },
+      ],
+    });
+    expect(Object.keys(request!.questions)).toEqual(["post0", "post1", "post2"]);
+    expect(request!.questions["post1"]!.type).toBe("noul");
+    expect(request!.questions["post1"]!.instructions).toContain("post number 1");
+    // Reddit ids never reach the model.
+    expect(JSON.stringify(request)).not.toMatch(/"a1"|"b2"|"c3"/);
+
+    // Recorded as one filterPosts call, priced at Jev's input-only rate.
+    expect(calls(d)).toHaveLength(1);
+    expect(calls(d)[0]).toMatchObject({
+      feature: "filterPosts",
+      model: JEV_MODEL_ID,
+      status: "ok",
+      input_tokens: 120,
+      output_tokens: 0,
+    });
+    expect(calls(d)[0]!.cost_usd).toBeCloseTo((120 * 0.042) / 1_000_000, 12);
+  });
+
+  test("sensitivity moves the threshold: hide when P > 1 - sensitivity", async () => {
+    const d = await setup(JEV);
+    d.fetch.on("POST", TYPESAFE_DECIDE_URL, typesafeDecisions(probabilities));
+    const { app } = aiApp(d);
+    const strict = await post(app, "/api/ai/filterPosts", { ...filterBody, sensitivity: 0.3 });
+    expect(await strict.json()).toEqual({ a1: false, b2: true, c3: false });
+    const loose = await post(app, "/api/ai/filterPosts", { ...filterBody, sensitivity: 0.99 });
+    expect(await loose.json()).toEqual({ a1: true, b2: true, c3: true });
+    const max = await post(app, "/api/ai/filterPosts", { ...filterBody, sensitivity: 1 });
+    expect(await max.json()).toEqual({ a1: true, b2: true, c3: true });
+    const explicitDefault = await post(app, "/api/ai/filterPosts", {
+      ...filterBody,
+      sensitivity: null,
+    });
+    expect(await explicitDefault.json()).toEqual({ a1: false, b2: true, c3: true });
+  });
+
+  test("sensitivity 0 hides nothing without calling the model, still gated", async () => {
+    const d = await setup(JEV);
+    const { app } = aiApp(d);
+    const res = await post(app, "/api/ai/filterPosts", { ...filterBody, sensitivity: 0 });
+    expect(await res.json()).toEqual({ a1: false, b2: false, c3: false });
+    const notPro = await post(app, "/api/ai/filterPosts", {
+      ...filterBody,
+      sensitivity: 0,
+      customerId: FREE_CUSTOMER,
+    });
+    expect(notPro.status).toBe(403);
+    expect(d.fetch.calls).toHaveLength(0);
+  });
+
+  test.each([1.5, -0.1, "0.5", true])("sensitivity %p is a 400", async (sensitivity) => {
+    const d = await setup(JEV);
+    const { app } = aiApp(d);
+    const res = await post(app, "/api/ai/filterPosts", { ...filterBody, sensitivity });
+    expect(res.status).toBe(400);
+    expect(d.fetch.calls).toHaveLength(0);
+  });
+
+  // 60 posts: the 3 above plus 57 fillers, so batches of 50 and 10.
+  const bigBody = {
+    ...filterBody,
+    posts: [
+      ...filterBody.posts,
+      ...Array.from({ length: 57 }, (_, i) => ({
+        id: `f${i}`,
+        subreddit: "pics",
+        title: `Filler ${i}`,
+      })),
+    ],
+  };
+  /** Answers normally, except batches whose first post number matches fail with a 400. */
+  function failingBatches(fails: (first: number) => boolean) {
+    const decide = typesafeDecisions(probabilities);
+    return (call: Parameters<typeof decide>[0]) => {
+      const request = JSON.parse(call.body ?? "{}") as TypeSafeRequest;
+      if (fails(request.state.posts[0]?.number ?? -1)) {
+        return { status: 400, json: { message: "rate limited" } };
+      }
+      return decide(call);
+    };
+  }
+
+  test("more than 50 posts are split into batches; a failed batch's posts stay visible", async () => {
+    const d = await setup(JEV);
+    d.fetch.on(
+      "POST",
+      TYPESAFE_DECIDE_URL,
+      failingBatches((first) => first === 50),
+    );
+    const { app } = aiApp(d);
+    const res = await post(app, "/api/ai/filterPosts", bigBody);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, boolean>;
+    expect(body).toMatchObject({ a1: false, b2: true, c3: true });
+    expect(Object.values(body).filter(Boolean)).toHaveLength(2);
+    expect(
+      sentToTypeSafe(d)
+        .map((r) => r.state.posts.length)
+        .sort((a, b) => a - b),
+    ).toEqual([10, 50]);
+    expect(calls(d)[0]).toMatchObject({ status: "partial", input_tokens: 100, error: null });
+    // 10 posts of 60 isn't a degraded request, so nothing alerts.
+    expect(d.alerter.alerts).toEqual([]);
+  });
+
+  // A rate-limited or half-down TypeSafe used to look like success: each
+  // request answered 200 (posts left visible) and nothing alerted.
+  test("requests where most posts fail count toward the failure-rate alert", async () => {
+    const d = await setup(JEV);
+    d.fetch.on(
+      "POST",
+      TYPESAFE_DECIDE_URL,
+      failingBatches((first) => first === 0),
+    );
+    const { app } = aiApp(d);
+    for (let i = 0; i < 3; i++) {
+      const res = await post(app, "/api/ai/filterPosts", bigBody);
+      expect(res.status).toBe(200);
+      expect(Object.values((await res.json()) as Record<string, boolean>).some(Boolean)).toBe(
+        false,
+      );
+    }
+    const rows = calls(d);
+    expect(rows.map((r) => r.status)).toEqual(["partial", "partial", "partial"]);
+    expect(rows[0]!.error).toStartWith("50 of 60 posts failed (first: ");
+    const alert = d.alerter.alerts.find((a) => a.key === "ai-failures:filterPosts");
+    expect(alert?.message).toContain("AI filterPosts mostly failed (jev-1.14.0)");
+  });
+
+  test("a normal page that fails is a 502 the failure-rate alert counts", async () => {
+    const d = await setup(JEV);
+    // A 400 isn't retried (a 5xx would be, after a backoff), which keeps this fast.
+    d.fetch.on("POST", TYPESAFE_DECIDE_URL, { status: 400, json: { message: "rejected" } });
+    const { app } = aiApp(d);
+    for (let i = 0; i < 3; i++) {
+      const res = await post(app, "/api/ai/filterPosts", filterBody);
+      expect(res.status).toBe(502);
+    }
+    expect(d.alerter.alerts.map((a) => a.key)).toContain("ai-failures:filterPosts");
+  });
+
+  test("every call failing (a revoked key) is a text 502 and alerts at once", async () => {
+    const d = await setup(JEV);
+    d.fetch.on("POST", TYPESAFE_DECIDE_URL, { status: 401, json: { message: "invalid key" } });
+    const { app } = aiApp(d);
+    const res = await post(app, "/api/ai/filterPosts", filterBody);
+    expect(res.status).toBe(502);
+    expect(res.headers.get("content-type")).toStartWith("text/plain");
+    expect(calls(d)[0]).toMatchObject({ model: JEV_MODEL_ID, status: "upstream_error" });
+    expect(d.alerter.alerts.map((a) => a.key)).toContain("ai-auth:filterPosts");
+  });
+
+  test("the other AI features keep using AI_PROVIDER", async () => {
+    const d = await setup(JEV);
+    d.fetch.on("POST", GROQ_CHAT_URL, groqChat({ content: "A summary." }));
+    const { app } = aiApp(d);
+    const res = await post(app, "/api/ai/summarizePostDetails", summaryBody);
+    expect(res.status).toBe(200);
+    expect(d.fetch.calls.map((c) => c.url)).toEqual([GROQ_CHAT_URL]);
+  });
+});
+
+describe("POST /api/ai/filterPosts on the LLM (no TYPESAFE_AI_API_KEY)", () => {
+  test("accepts a sensitivity but can't use it; 0 still skips the call", async () => {
+    const d = await setup();
+    d.fetch.on("POST", GROQ_CHAT_URL, groqChat({ content: '{"hide":[1]}' }));
+    const { app } = aiApp(d);
+    const res = await post(app, "/api/ai/filterPosts", { ...filterBody, sensitivity: 0.9 });
+    expect(await res.json()).toEqual({ a1: false, b2: true, c3: false });
+    expect(d.fetch.calls).toHaveLength(1);
+    const off = await post(app, "/api/ai/filterPosts", { ...filterBody, sensitivity: 0 });
+    expect(await off.json()).toEqual({ a1: false, b2: false, c3: false });
+    expect(d.fetch.calls).toHaveLength(1);
+  });
+});
+
 describe("POST /api/ai/askQuestion", () => {
   const askBody = { question: "How do I add an account?", docs: ["# Accounts\nTap the + button."] };
 
@@ -766,6 +979,9 @@ describe("errors are text on every status", () => {
           throw new TypeError("boom");
         },
         embeddingModel: () => {
+          throw new TypeError("boom");
+        },
+        decisionModel: () => {
           throw new TypeError("boom");
         },
       },

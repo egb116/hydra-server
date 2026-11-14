@@ -1,7 +1,8 @@
 /**
  * Offline evaluation harness for filterPosts classifiers.
  *
- *   bun scripts/eval-filter.ts [--classifier llm|keyword] [--dir <folder>] [--case <text>] [--json]
+ *   bun scripts/eval-filter.ts [--classifier llm|jev|keyword] [--sensitivity <0-1>] [--sweep]
+ *                              [--dir <folder>] [--case <text>] [--json]
  *
  * It loads every *.jsonl file in the fixtures folder (default
  * tests/fixtures/filter-eval; see its README), runs the chosen classifier on
@@ -10,10 +11,16 @@
  *
  * The default "llm" classifier is the server's LlmPostClassifier over the
  * registry's filter model. It reads AI_PROVIDER, GROQ_API_KEY,
- * OPENAI_API_KEY, OPENAI_BASE_URL and AI_MODEL_FILTER from the environment,
- * and it makes real API calls, so only a human should run it. Bun loads
- * ./.env automatically, so keys there are used too. The "keyword" baseline
- * needs no network.
+ * OPENAI_API_KEY, OPENAI_BASE_URL and AI_MODEL_FILTER from the environment.
+ * "jev" is the server's JevPostClassifier and reads TYPESAFE_AI_API_KEY.
+ * Both make real, billed API calls, so only a human should run them. Bun
+ * loads ./.env automatically, so keys there are used too. The "keyword"
+ * baseline needs no network.
+ *
+ * --sensitivity is passed to the classifier like the app's setting (only
+ * scoring classifiers use it). --sweep reuses the scores of that one run to
+ * print precision, recall and F1 at every threshold, which is how the
+ * default sensitivity should be chosen.
  *
  * This file is not a test and never runs under `bun test`.
  */
@@ -27,6 +34,8 @@ import {
   buildAiRegistry,
   costUsd,
   createProviderModelFactory,
+  hideThreshold,
+  JevPostClassifier,
   LlmPostClassifier,
   toClassifierPosts,
 } from "../src/modules/ai";
@@ -103,6 +112,10 @@ export interface CaseResult {
   latencyMs: number;
   costUsd: number;
   error: string | null;
+  /** Each post's match probability by post id, when the classifier scores posts. */
+  scores: Record<string, number> | null;
+  /** The ids that should be hidden (the case's labels), for --sweep. */
+  expectedHide: string[];
 }
 
 export type Pricing = (usage: { inputTokens: number; outputTokens: number }) => number;
@@ -113,6 +126,7 @@ export async function runCase(
   evalCase: EvalCase,
   pricing: Pricing = () => 0,
   now: () => number = () => performance.now(),
+  sensitivity: number | null = null,
 ): Promise<CaseResult> {
   const posts = toClassifierPosts(
     evalCase.posts.map((p) => ({
@@ -125,13 +139,26 @@ export async function runCase(
   let hidden = new Set<number>();
   let cost = 0;
   let error: string | null = null;
+  let scores: Record<string, number> | null = null;
   try {
     const result = await classifier.classify(
-      { description: evalCase.description, posts },
+      {
+        description: evalCase.description,
+        posts,
+        ...(sensitivity === null ? {} : { sensitivity }),
+      },
       AbortSignal.timeout(120_000),
     );
     hidden = result.hide;
     if (result.usage) cost = pricing(result.usage);
+    if (result.scores) {
+      const byId: Record<string, number> = {};
+      for (const [index, score] of result.scores) {
+        const post = evalCase.posts[index];
+        if (post) byId[post.id] = score;
+      }
+      scores = byId;
+    }
   } catch (err) {
     error = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
   }
@@ -147,6 +174,8 @@ export async function runCase(
     latencyMs,
     costUsd: cost,
     error,
+    scores,
+    expectedHide: [...evalCase.hide],
   };
   evalCase.posts.forEach((post, index) => {
     const predicted = hidden.has(index);
@@ -214,6 +243,57 @@ export function summarize(results: readonly CaseResult[]): Summary {
     latencyP95Ms: percentile(latencies, 95),
     totalCostUsd: results.reduce((sum, r) => sum + r.costUsd, 0),
   };
+}
+
+export interface SweepRow {
+  /** Hide when the score is above this. */
+  threshold: number;
+  /** The app setting that gives this threshold (1 - threshold). */
+  sensitivity: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  hidden: number;
+}
+
+/**
+ * Precision, recall and F1 at each sensitivity (0.95 down to 0.05, so the
+ * thresholds ascend), from the scores of one run. Thresholds come from the
+ * server's own hideThreshold, so each row is exactly what that setting does
+ * in production. Only posts that were scored count.
+ */
+export function sweep(
+  results: readonly CaseResult[],
+  sensitivities: readonly number[] = Array.from({ length: 19 }, (_, i) => (19 - i) / 20),
+): SweepRow[] {
+  const scored = results.filter((r) => r.scores !== null);
+  return sensitivities.map((sensitivity) => {
+    const threshold = hideThreshold(sensitivity);
+    let tp = 0;
+    let fp = 0;
+    let fn = 0;
+    for (const r of scored) {
+      const expected = new Set(r.expectedHide);
+      for (const [id, score] of Object.entries(r.scores ?? {})) {
+        const predicted = score > threshold;
+        const actual = expected.has(id);
+        if (predicted && actual) tp++;
+        else if (predicted) fp++;
+        else if (actual) fn++;
+      }
+    }
+    const precision = tp + fp === 0 ? 1 : tp / (tp + fp);
+    const recall = tp + fn === 0 ? 1 : tp / (tp + fn);
+    const f1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+    return {
+      threshold,
+      sensitivity,
+      precision,
+      recall,
+      f1,
+      hidden: tp + fp,
+    };
+  });
 }
 
 const STOPWORDS = new Set(
@@ -293,15 +373,47 @@ function llmClassifierFromEnv(env: Record<string, string | undefined>): LlmSetup
   };
 }
 
+function jevClassifierFromEnv(env: Record<string, string | undefined>): LlmSetup {
+  const apiKey = env["TYPESAFE_AI_API_KEY"];
+  if (!apiKey) throw new Error("--classifier jev needs TYPESAFE_AI_API_KEY");
+  const ai = {
+    provider: "groq" as const,
+    models: { summary: null, filter: null, answer: null },
+    typesafeApiKey: apiKey,
+  };
+  const entry = buildAiRegistry(ai, "selfhost").registry.filterPosts;
+  const models = createProviderModelFactory(
+    { groqApiKey: null, openaiApiKey: null, openaiBaseUrl: null, typesafeApiKey: apiKey },
+    createOutboundFetch(),
+  );
+  return {
+    classifier: new JevPostClassifier({
+      model: models.decisionModel(entry),
+      timeoutMs: 120_000,
+    }),
+    pricing: (usage) => costUsd(entry, usage.inputTokens, usage.outputTokens),
+    label: `jev (typesafe: ${entry.modelId})`,
+  };
+}
+
 interface Args {
-  classifier: "llm" | "keyword";
+  classifier: "llm" | "jev" | "keyword";
   dir: string;
   filter: string | null;
   json: boolean;
+  sensitivity: number | null;
+  sweep: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): Args {
-  const args: Args = { classifier: "llm", dir: DEFAULT_FIXTURE_DIR, filter: null, json: false };
+  const args: Args = {
+    classifier: "llm",
+    dir: DEFAULT_FIXTURE_DIR,
+    filter: null,
+    json: false,
+    sensitivity: null,
+    sweep: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const value = (): string => {
@@ -311,9 +423,19 @@ export function parseArgs(argv: readonly string[]): Args {
     };
     if (arg === "--classifier") {
       const kind = value();
-      if (kind !== "llm" && kind !== "keyword") throw new Error(`unknown classifier "${kind}"`);
+      if (kind !== "llm" && kind !== "jev" && kind !== "keyword") {
+        throw new Error(`unknown classifier "${kind}"`);
+      }
       args.classifier = kind;
-    } else if (arg === "--dir") args.dir = resolve(value());
+    } else if (arg === "--sensitivity") {
+      const raw = value();
+      const n = Number(raw);
+      if (raw.trim() === "" || !Number.isFinite(n) || n < 0 || n > 1) {
+        throw new Error(`--sensitivity must be between 0 and 1, got "${raw}"`);
+      }
+      args.sensitivity = n;
+    } else if (arg === "--sweep") args.sweep = true;
+    else if (arg === "--dir") args.dir = resolve(value());
     else if (arg === "--case") args.filter = value().toLowerCase();
     else if (arg === "--json") args.json = true;
     else throw new Error(`unknown argument "${arg}"`);
@@ -347,6 +469,27 @@ function report(label: string, results: readonly CaseResult[], summary: Summary)
   return `${lines.join("\n")}\n`;
 }
 
+function sweepReport(rows: readonly SweepRow[]): string {
+  const lines = [
+    "",
+    "threshold sweep (hide when score > threshold; the app's sensitivity = 1 - threshold):",
+    "threshold  sensitivity  precision  recall  F1      hidden",
+  ];
+  for (const row of rows) {
+    lines.push(
+      [
+        row.threshold.toFixed(2).padEnd(9),
+        row.sensitivity.toFixed(2).padEnd(11),
+        pct(row.precision).padEnd(9),
+        pct(row.recall).padEnd(6),
+        pct(row.f1).padEnd(6),
+        String(row.hidden),
+      ].join("  "),
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv);
   let cases = loadCases(args.dir);
@@ -364,15 +507,26 @@ export async function main(argv: readonly string[]): Promise<number> {
   const setup: LlmSetup =
     args.classifier === "keyword"
       ? { classifier: keywordClassifier(), pricing: () => 0, label: "keyword baseline" }
-      : llmClassifierFromEnv(process.env);
+      : args.classifier === "jev"
+        ? jevClassifierFromEnv(process.env)
+        : llmClassifierFromEnv(process.env);
   const results: CaseResult[] = [];
   // Sequential on purpose: latency numbers stay comparable and rate limits are not hit.
-  for (const c of cases) results.push(await runCase(setup.classifier, c, setup.pricing));
+  for (const c of cases) {
+    results.push(await runCase(setup.classifier, c, setup.pricing, undefined, args.sensitivity));
+  }
   const summary = summarize(results);
+  const scored = results.some((r) => r.scores !== null);
+  if (args.sweep && !scored) {
+    process.stderr.write(
+      `--sweep: ${setup.label} doesn't score posts, so there is nothing to sweep\n`,
+    );
+  }
+  const rows = args.sweep && scored ? sweep(results) : null;
   process.stdout.write(
     args.json
-      ? `${JSON.stringify({ classifier: setup.label, results, summary }, null, 2)}\n`
-      : report(setup.label, results, summary),
+      ? `${JSON.stringify({ classifier: setup.label, results, summary, sweep: rows }, null, 2)}\n`
+      : report(setup.label, results, summary) + (rows ? sweepReport(rows) : ""),
   );
   return summary.errors > 0 ? 2 : 0;
 }

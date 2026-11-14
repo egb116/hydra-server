@@ -135,7 +135,8 @@ export function registerAiRoutes(app: App, options: AiRoutesOptions): void {
     const body = await readJson(c, filterPostsSchema);
     // Exactly the requested ids, each defaulting to false (shown).
     const decisions = new Map<string, boolean>(body.posts.map((p) => [p.id, false]));
-    if (body.posts.length === 0 || body.filterDescription.trim() === "") {
+    // Sensitivity 0 hides nothing whatever the scores, so there's nothing to ask the model.
+    if (body.posts.length === 0 || body.filterDescription.trim() === "" || body.sensitivity === 0) {
       entitlements.requirePro(body.customerId);
       return c.json(Object.fromEntries(decisions));
     }
@@ -145,13 +146,18 @@ export function registerAiRoutes(app: App, options: AiRoutesOptions): void {
       { customerId: body.customerId, clientIp: clientIp(c), signal: c.req.raw.signal },
       async ({ signal }) => {
         const outcome: ClassifyOutcome = await classifier.classify(
-          { description: body.filterDescription, posts: toClassifierPosts(body.posts) },
+          {
+            description: body.filterDescription,
+            posts: toClassifierPosts(body.posts),
+            ...(body.sensitivity == null ? {} : { sensitivity: body.sensitivity }),
+          },
           signal,
         );
         return {
           value: outcome.hide,
           usage: outcome.usage ?? null,
           status: outcome.status ?? "ok",
+          ...(outcome.degraded ? { degraded: outcome.degraded } : {}),
         };
       },
     );

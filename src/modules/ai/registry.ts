@@ -29,11 +29,14 @@ export type AiTier = "pro" | "free";
 
 export type ProviderOptionsMap = Record<string, Record<string, JSONValue>>;
 
+/** TypeSafe AI serves the Jev decision model, used for filterPosts when TYPESAFE_AI_API_KEY is set. */
+export type ModelProvider = AiProvider | "typesafe";
+
 export interface ModelEntry {
   feature: AiFeature;
   /** "openai" for the embedding model regardless of AI_PROVIDER (v1 behaviour). */
-  provider: AiProvider;
-  kind: "language" | "embedding";
+  provider: ModelProvider;
+  kind: "language" | "embedding" | "decision";
   modelId: string;
   /** USD per million input tokens. Null when the price is unknown (selfhost only). */
   inputUsdPerMTok: number | null;
@@ -68,9 +71,21 @@ export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   "openai/gpt-4.1": { inputUsdPerMTok: 2.0, outputUsdPerMTok: 8.0 },
   "gpt-4.1": { inputUsdPerMTok: 2.0, outputUsdPerMTok: 8.0 },
   "text-embedding-3-small": { inputUsdPerMTok: 0.02, outputUsdPerMTok: 0 },
+  // docs.typesafe.ai/models, 2026-11: $42 per billion input tokens; output is free.
+  "jev-1.14.0": { inputUsdPerMTok: 0.042, outputUsdPerMTok: 0 },
 };
 
 export const EMBEDDING_MODEL_ID = "text-embedding-3-small";
+
+/**
+ * The Jev version for filterPosts. Pinned, not "jev-latest": the default
+ * sensitivity is tuned against one version's probabilities, and a silent model
+ * change could move them. Re-run `bun scripts/eval-filter.ts --classifier jev
+ * --sweep` before bumping it.
+ */
+export const JEV_MODEL_ID = "jev-1.14.0";
+/** Per Jev request. A decision call is one short classification, not generation. */
+export const JEV_TIMEOUT_MS = 10_000;
 
 /**
  * v1's model choices per provider, except that the OpenAI ids are the bare
@@ -130,6 +145,23 @@ export function providerOptionsFor(
   return Object.keys(groq).length > 0 ? { groq } : {};
 }
 
+/** filterPosts on the Jev decision model. Its price is always known. */
+function jevEntry(): ModelEntry {
+  const price = MODEL_PRICES[JEV_MODEL_ID];
+  return Object.freeze({
+    feature: "filterPosts",
+    provider: "typesafe",
+    kind: "decision",
+    modelId: JEV_MODEL_ID,
+    inputUsdPerMTok: price?.inputUsdPerMTok ?? null,
+    outputUsdPerMTok: price?.outputUsdPerMTok ?? null,
+    maxOutputTokens: null,
+    providerOptions: {},
+    timeoutMs: JEV_TIMEOUT_MS,
+    tier: "pro",
+  });
+}
+
 export function priceFor(modelId: string): ModelPrice | null {
   return Object.hasOwn(MODEL_PRICES, modelId) ? (MODEL_PRICES[modelId] ?? null) : null;
 }
@@ -154,13 +186,14 @@ export interface BuiltRegistry {
  * call is recorded at cost 0.
  */
 export function buildAiRegistry(
-  ai: Pick<Config["ai"], "provider" | "models">,
+  ai: Pick<Config["ai"], "provider" | "models"> & { typesafeApiKey?: string | null },
   mode: HydraMode,
 ): BuiltRegistry {
   const defaults = DEFAULT_MODELS[ai.provider];
   const problems: string[] = [];
   const warnings: string[] = [];
   const entryFor = (feature: AiFeature): ModelEntry => {
+    if (feature === "filterPosts" && ai.typesafeApiKey) return jevEntry();
     const spec = FEATURE_SPECS[feature];
     const isEmbedding = spec.slot === "embedding";
     const provider: AiProvider = isEmbedding ? "openai" : ai.provider;

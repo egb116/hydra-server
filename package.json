@@ -16,6 +16,7 @@
   "dependencies": {
     "@ai-sdk/groq": "4.0.83",
     "@ai-sdk/openai": "4.0.117",
+    "@ai-sdk/typesafe-ai": "3.0.40",
     "ai": "7.0.172",
     "drizzle-orm": "0.45.4",
     "expo-server-sdk": "8.0.0",

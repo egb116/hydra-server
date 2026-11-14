@@ -33,6 +33,8 @@ export interface Config {
     readonly groqApiKey: string | null;
     readonly openaiApiKey: string | null;
     readonly openaiBaseUrl: string | null;
+    /** When set, filterPosts uses TypeSafe AI's Jev decision model instead of AI_PROVIDER's model. */
+    readonly typesafeApiKey: string | null;
     /** Overrides; null means "use the registry default for the provider". */
     readonly models: {
       readonly summary: string | null;
@@ -108,6 +110,7 @@ const envSchema = z.object({
   GROQ_API_KEY: optionalString,
   OPENAI_API_KEY: optionalString,
   OPENAI_BASE_URL: blank(z.url({ protocol: /^https?$/ })),
+  TYPESAFE_AI_API_KEY: optionalString,
   AI_MODEL_SUMMARY: optionalString,
   AI_MODEL_FILTER: optionalString,
   AI_MODEL_ANSWER: optionalString,
@@ -237,6 +240,7 @@ export function loadConfig(env: Env): Config {
       groqApiKey: e.GROQ_API_KEY ?? null,
       openaiApiKey: e.OPENAI_API_KEY ?? null,
       openaiBaseUrl: e.OPENAI_BASE_URL ?? null,
+      typesafeApiKey: e.TYPESAFE_AI_API_KEY ?? null,
       models: {
         summary: e.AI_MODEL_SUMMARY ?? e.OPENAI_SUMMARY_MODEL ?? null,
         filter: e.AI_MODEL_FILTER ?? e.OPENAI_FILTER_MODEL ?? null,

@@ -12,6 +12,7 @@ import {
   parseCases,
   runCase,
   summarize,
+  sweep,
 } from "../../../scripts/eval-filter";
 
 describe("filter-eval fixtures", () => {
@@ -102,6 +103,8 @@ describe("scoring", () => {
       latencyMs: 10,
       costUsd: 0.5,
       error: null,
+      scores: null,
+      expectedHide: [],
     };
     const summary = summarize([
       { ...base, truePositives: ["a", "b", "c"], falsePositives: ["x"], latencyMs: 100 },
@@ -132,5 +135,113 @@ describe("scoring", () => {
     });
     expect(() => parseArgs(["--classifier", "magic"])).toThrow();
     expect(() => parseArgs(["--bogus"])).toThrow();
+  });
+
+  test("parseArgs: jev, sensitivity and sweep", () => {
+    expect(parseArgs(["--classifier", "jev", "--sensitivity", "0.3", "--sweep"])).toMatchObject({
+      classifier: "jev",
+      sensitivity: 0.3,
+      sweep: true,
+    });
+    expect(parseArgs([])).toMatchObject({ sensitivity: null, sweep: false });
+    for (const bad of ["1.2", "-0.1", "", "high"]) {
+      expect(() => parseArgs(["--sensitivity", bad])).toThrow();
+    }
+  });
+});
+
+describe("scores and the threshold sweep", () => {
+  const evalCase = parseCases(
+    JSON.stringify({
+      description: "politics",
+      posts: [
+        { id: "p1", title: "Election" },
+        { id: "p2", title: "Senate" },
+        { id: "p3", title: "Cats" },
+      ],
+      hide: ["p1", "p2"],
+    }),
+    "inline.jsonl",
+  )[0]!;
+
+  test("runCase passes the sensitivity and keeps each post's score by id", async () => {
+    const seen: (number | undefined)[] = [];
+    const scores = new Map([
+      [0, 0.9],
+      [1, 0.4],
+      [2, 0.1],
+    ]);
+    const result = await runCase(
+      {
+        name: "fixed",
+        classify: async ({ sensitivity }) => {
+          seen.push(sensitivity);
+          return { hide: new Set([0]), scores };
+        },
+      },
+      evalCase,
+      () => 0,
+      () => 0,
+      0.3,
+    );
+    expect(seen).toEqual([0.3]);
+    expect(result.scores).toEqual({ p1: 0.9, p2: 0.4, p3: 0.1 });
+    expect(result.expectedHide).toEqual(["p1", "p2"]);
+  });
+
+  test("sweep scores every threshold from one run's scores", () => {
+    const result: CaseResult = {
+      source: "s",
+      description: "d",
+      truePositives: [],
+      falsePositives: [],
+      falseNegatives: [],
+      trueNegatives: 0,
+      latencyMs: 0,
+      costUsd: 0,
+      error: null,
+      scores: { p1: 0.9, p2: 0.4, p3: 0.1 },
+      expectedHide: ["p1", "p2"],
+    };
+    const unscored: CaseResult = { ...result, scores: null, expectedHide: ["zzz"] };
+    const rows = sweep([result, unscored], [0.95, 0.7, 0.5, 0.05]);
+    expect(rows.map((r) => [r.threshold, r.sensitivity, r.hidden])).toEqual([
+      [0.05, 0.95, 3],
+      [0.3, 0.7, 2],
+      [0.5, 0.5, 1],
+      [0.95, 0.05, 0],
+    ]);
+    // At 0.3 both matches are caught and the cat isn't: perfect.
+    expect(rows[1]).toMatchObject({ precision: 1, recall: 1, f1: 1 });
+    // At 0.5 the borderline match is missed.
+    expect(rows[2]!.precision).toBe(1);
+    expect(rows[2]!.recall).toBe(0.5);
+    // At 0.05 everything is hidden, including the cat.
+    expect(rows[0]!.precision).toBeCloseTo(2 / 3, 12);
+    // Nothing hidden: precision is 1 by convention, recall 0.
+    expect(rows[3]).toMatchObject({ precision: 1, recall: 0 });
+  });
+
+  // The server and the sweep must agree exactly at a 2-decimal boundary:
+  // 1 - 0.9 is 0.0999… in floating point, which used to hide a 0.10 score on
+  // the server but not in the sweep.
+  test("a score exactly at the threshold is shown, in the sweep as on the server", () => {
+    const base: CaseResult = {
+      source: "s",
+      description: "d",
+      truePositives: [],
+      falsePositives: [],
+      falseNegatives: [],
+      trueNegatives: 0,
+      latencyMs: 0,
+      costUsd: 0,
+      error: null,
+      scores: { a: 0.1, b: 0.2, c: 0.45 },
+      expectedHide: [],
+    };
+    const [at90, at80, at55] = sweep([base], [0.9, 0.8, 0.55]);
+    expect(at90).toMatchObject({ threshold: 0.1, hidden: 2 });
+    expect(at80).toMatchObject({ threshold: 0.2, hidden: 1 });
+    expect(at55).toMatchObject({ threshold: 0.45, hidden: 0 });
   });
 });

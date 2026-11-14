@@ -75,6 +75,12 @@ export const filterPostsSchema = z.object({
   customerId: customerIdField,
   filterDescription: z.string().max(LIMITS.filterDescription),
   posts: z.array(filterPostSchema).max(LIMITS.posts),
+  /**
+   * Optional, added after v1: how readily posts are hidden, from 0 (never) to
+   * 1 (anything that might match). Absent or null means the default; app
+   * builds before it existed never send it.
+   */
+  sensitivity: z.number().min(0).max(1).nullish(),
 });
 
 export const askQuestionSchema = z.object({

@@ -21,6 +21,55 @@ export interface FilterPromptInput {
   posts: readonly ClassifierPost[];
 }
 
+/**
+ * Decision-model state for a batch of posts: the reader's description once,
+ * then each post with its server-assigned number (never its Reddit id).
+ * Everything here is data; the questions (filterDecisionQuestion) are the
+ * only instructions. Absent post fields are left out rather than sent empty.
+ *
+ * Measured on Jev (2026-11-14, 25-post pages): this layout matched one call
+ * per post on 99.4% of decisions at about a third of the tokens and a third
+ * of the latency. Repeating the description in every question instead was
+ * clearly worse (it missed obvious matches).
+ */
+export function filterDecisionState(
+  description: string,
+  posts: readonly ClassifierPost[],
+): { filter_description: string; posts: Record<string, string | number>[] } {
+  return {
+    filter_description: description,
+    posts: posts.map((post) => {
+      const entry: Record<string, string | number> = { number: post.index };
+      if (post.subreddit !== undefined && post.subreddit !== "")
+        entry["subreddit"] = post.subreddit;
+      entry["title"] = post.title;
+      if (post.body !== undefined && post.body !== "") entry["text"] = post.body;
+      return entry;
+    }),
+  };
+}
+
+/** The question id for a post in a batch. */
+export function filterQuestionId(post: Pick<ClassifierPost, "index">): string {
+  return `post${post.index}`;
+}
+
+/**
+ * The question for one post of a batch: does it match the reader's
+ * description of posts they don't want to see? P(true) is compared to the
+ * request's threshold.
+ */
+export function filterDecisionQuestion(post: Pick<ClassifierPost, "index">) {
+  return {
+    type: "boolean",
+    instructions: `Does post number ${post.index} match the reader's filter_description (posts they do NOT want to see)? Judge only that post, using its subreddit, title and text.`,
+    criteria: {
+      true: "The post matches the description, so the reader would not want to see it.",
+      false: "The post does not match the description, or there is not enough information to tell.",
+    },
+  } as const;
+}
+
 export function filterPostsPrompt(input: FilterPromptInput): string {
   const posts = input.posts.map((post) => {
     const parts: string[] = [];

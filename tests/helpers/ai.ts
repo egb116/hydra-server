@@ -6,10 +6,49 @@ import { Forbidden } from "../../src/lib/errors";
 import type { EntitlementService } from "../../src/modules/contracts";
 import { type AiModuleOptions, createAiModule } from "../../src/modules/ai";
 import type { App, Deps } from "../../src/types";
-import type { FakeResponseSpec } from "./index";
+import type { FakeResponseSpec, FetchCall } from "./index";
 
 export const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 export const OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings";
+/** TypeSafe AI's decision endpoint (Jev). */
+export const TYPESAFE_DECIDE_URL = "https://api.typesafe.ai/v1/systemone";
+
+/** The JSON body @ai-sdk/typesafe-ai sends to /systemone for a batch of posts. */
+export interface TypeSafeRequest {
+  model: string;
+  state: {
+    filter_description: string;
+    posts: { number: number; title: string; subreddit?: string; text?: string }[];
+  };
+  questions: Record<string, { type: string; instructions?: string; criteria?: unknown }>;
+}
+
+/**
+ * A /systemone responder for batches: each post's probability of matching,
+ * looked up by its title (unknown titles get 0), answered under its question
+ * id ("post<number>") as a boolean ("noul") answer.
+ */
+export function typesafeDecisions(
+  byTitle: Readonly<Record<string, number>>,
+  inputTokens = 100,
+): (call: FetchCall) => FakeResponseSpec {
+  return (call) => {
+    const request = JSON.parse(call.body ?? "{}") as TypeSafeRequest;
+    const titles = new Map(request.state.posts.map((p) => [`post${p.number}`, p.title]));
+    return {
+      json: {
+        model: request.model,
+        answers: Object.fromEntries(
+          Object.keys(request.questions).map((id) => [
+            id,
+            { type: "noul", noul: byTitle[titles.get(id) ?? ""] ?? 0 },
+          ]),
+        ),
+        usage: { input_tokens: inputTokens, output_tokens: 0 },
+      },
+    };
+  };
+}
 
 export const PRO_CUSTOMER = "$RCAnonymousID:0123456789abcdef";
 export const FREE_CUSTOMER = "free-customer";

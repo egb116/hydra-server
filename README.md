@@ -87,6 +87,7 @@ Settings go in `.env`. If one is invalid, the server won't start and the log tel
 | `AI_PROVIDER` | `groq` or `openai`. |
 | `OPENAI_API_KEY` | Key for the AI features when `AI_PROVIDER` is `openai`. The in-app guide search always uses OpenAI, so it needs this key either way. |
 | `OPENAI_BASE_URL` | Point `openai` at any OpenAI-compatible server, such as a local model. |
+| `TYPESAFE_AI_API_KEY` | Optional. Post filtering uses [TypeSafe AI](https://typesafe.ai)'s Jev model instead of `AI_PROVIDER`, and follows the app's filter sensitivity. |
 | `DASHBOARD_PASSWORD` | Turns on `/admin`. At least 16 characters. |
 | `WEBSHARE_TOKEN` | Sends Reddit requests through [Webshare](https://www.webshare.io) proxies instead of your own IP. |
 | `DISCORD_WEBHOOK_URL` | Posts to a Discord channel when something goes wrong. |

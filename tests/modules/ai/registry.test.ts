@@ -5,6 +5,7 @@ import {
   costUsd,
   createAiModule,
   DEFAULT_MODELS,
+  JEV_MODEL_ID,
 } from "../../../src/modules/ai";
 import { type TestDeps, testConfig, testDeps } from "../../helpers";
 import {
@@ -86,6 +87,40 @@ describe("model registry defaults", () => {
     );
     expect(registry.filterPosts.providerOptions).toEqual({
       groq: { structuredOutputs: false, strictJsonSchema: false },
+    });
+  });
+});
+
+describe("filterPosts on Jev", () => {
+  test("TYPESAFE_AI_API_KEY switches only filterPosts to the pinned, priced Jev model", () => {
+    const ai = { ...testConfig().ai, typesafeApiKey: "ts-test" };
+    const { registry, warnings } = buildAiRegistry(ai, "official");
+    expect(warnings).toEqual([]);
+    expect(registry.filterPosts).toMatchObject({
+      provider: "typesafe",
+      kind: "decision",
+      modelId: JEV_MODEL_ID,
+      inputUsdPerMTok: 0.042,
+      outputUsdPerMTok: 0,
+      tier: "pro",
+    });
+    // Pinned to a version, never an alias whose probabilities could shift.
+    expect(JEV_MODEL_ID).toMatch(/^jev-\d+\.\d+\.\d+$/);
+    expect(registry.summarizePost.provider).toBe("groq");
+    expect(registry.answerDocs.provider).toBe("groq");
+  });
+
+  test("without the key the filter stays on AI_PROVIDER's model, overrides included", () => {
+    const ai = {
+      ...testConfig().ai,
+      typesafeApiKey: null,
+      models: { summary: null, filter: "openai/gpt-oss-120b", answer: null },
+    };
+    const { registry } = buildAiRegistry(ai, "official");
+    expect(registry.filterPosts).toMatchObject({
+      provider: "groq",
+      kind: "language",
+      modelId: "openai/gpt-oss-120b",
     });
   });
 });

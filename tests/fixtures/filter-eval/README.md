@@ -36,11 +36,16 @@ bun scripts/eval-filter.ts --classifier keyword
 GROQ_API_KEY=... bun scripts/eval-filter.ts
 AI_PROVIDER=openai OPENAI_API_KEY=... AI_MODEL_FILTER=gpt-4.1-mini bun scripts/eval-filter.ts
 
+# Jev (the decision model), at a given sensitivity, plus every other threshold
+TYPESAFE_AI_API_KEY=... bun scripts/eval-filter.ts --classifier jev --sensitivity 0.5 --sweep
+
 # Options
 bun scripts/eval-filter.ts --dir tests/fixtures/filter-eval --case politics --json
 ```
 
 The harness prints each case's result (hits, false positives and misses), then the micro-averaged precision, recall and F1, the latency (p50/p95) and the total estimated cost. "Positive" means hidden. Precision is the share of hidden posts that should have been hidden. Recall is the share of posts that should have been hidden that were hidden.
+
+`--sweep` works for classifiers that score posts (Jev). From that one run's scores it prints precision, recall and F1 at every threshold from 0.05 to 0.95, along with the sensitivity that gives each one. Use it to choose `DEFAULT_FILTER_SENSITIVITY`, preferably on real labeled cases rather than these synthetic ones.
 
 The harness never runs under `bun test`. `tests/modules/ai/evalFilter.test.ts` only checks that the fixtures are well formed and that the scoring math is right, using the offline keyword baseline.
 
