@@ -102,3 +102,7 @@ Settings go in `.env`. If one is invalid, the server won't start and the log tel
 Bug fixes are welcome.
 
 Please don't send changes that only make the server fit your own setup, like support for a different database, another hosting platform, or a new option for your environment. I can't maintain every setup people run. If you need something like that, fork the project and make it your own.
+
+## License
+
+Hydra Server is licensed under the [GNU AGPL v3](LICENSE), the same license as the Hydra app.
