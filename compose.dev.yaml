@@ -1,3 +1,5 @@
+# Like compose.yaml, but builds from this checkout (for testing local changes):
+#   docker compose -f compose.dev.yaml up --build
 services:
   hydra-server:
     build:
@@ -5,10 +7,11 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/app/config
+      # The SQLite database and its backups. The container gives ./data to uid 1000 on start.
       - ./data:/data
-    restart: unless-stopped
     env_file:
       - .env
     environment:
-      - IS_CUSTOM_SERVER=true
+      HYDRA_MODE: selfhost
+    restart: unless-stopped
+    stop_grace_period: 30s

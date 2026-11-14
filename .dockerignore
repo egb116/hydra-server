@@ -1,48 +1,53 @@
-# dependencies (bun install)
-node_modules
+# The image needs only package.json, bun.lock and src/ (see Dockerfile).
+# Everything else stays out of the build context: smaller uploads, no secrets, no databases.
+# Patterns without **/ match at the repository root only (e.g. `data` is not `src/data`).
 
-# output
+# Dependencies and build output
+**/node_modules
+**/dist
 out
-dist
-*.tgz
-
-# code coverage
 coverage
+*.tgz
 *.lcov
 
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.json
+# VCS and CI
+.git
+.github
 
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+# Databases, backups and rollback copies (never bake data into an image). Keep these patterns
+# specific: drizzle-kit names migrations <n>_<word>_<word>.sql from word lists that include
+# "old", so a loose pattern such as **/*_old* could silently drop a migration from the image.
+# tests/modules/ops checks that nothing under src/ is excluded.
+**/sqlite.db*
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.bak
+data
+config
 
-# caches
-.eslintcache
-.cache
-*.tsbuildinfo
+# Secrets
+.env*
 
-# IntelliJ based IDEs
-.idea
-
-# Finder (MacOS) folder config
-.DS_Store
-
-sqlite.db
-sqlite.db-shm
-sqlite.db-wal
-
-# Not needed at build time
+# Not needed at runtime
+tests
+docs
+scripts
+README.md
 compose.yaml
 compose.dev.yaml
-.github/
-README.md
-.prettierrc
-.prettierignore
-eslint.config.js
-tailwind.config.js
+fly.toml
+drizzle.config.ts
+tsconfig.json
+.oxlintrc.json
+.oxfmtrc.json
+
+# Logs, caches and editor files
+logs
+*.log
+.cache
+.eslintcache
+*.tsbuildinfo
+.idea
+.vscode
+.DS_Store

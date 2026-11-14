@@ -1,14 +1,22 @@
+# Self-host Hydra server with Docker Compose. See README.md.
+# Builds the image straight from GitHub, so no clone is needed. Put this file next to a .env
+# (copy .env.example), then:
+#   docker compose up -d
 services:
   hydra-server:
     build:
       context: https://github.com/dmilin1/hydra-server.git
     ports:
-      - 3000:3000
+      - "3000:3000"
     volumes:
-      - ./config:/app/config
+      # The SQLite database and its backups. The container gives ./data to uid 1000 (the user
+      # the server runs as) on every start, so a root-owned directory, e.g. v1's, is fine.
       - ./data:/data
-    restart: unless-stopped
     env_file:
       - .env
     environment:
-      - IS_CUSTOM_SERVER=true
+      # Every Pro feature unlocked; RevenueCat is never called.
+      HYDRA_MODE: selfhost
+    restart: unless-stopped
+    # The server drains for up to 25 s on SIGTERM; Docker's default 10 s would cut it short.
+    stop_grace_period: 30s

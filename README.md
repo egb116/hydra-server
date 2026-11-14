@@ -1,187 +1,108 @@
 # Hydra Server
 
-A backend service for the Hydra for Reddit app. Using a custom server will unlock all Hydra Pro features for free. If you have the knowhow to get this set up, please consider contributing your skills to the project!
+This is the server behind [Hydra](https://www.hydraapp.io), a Reddit client. If you run your own copy and point the app at it, you get all of the Pro features on your devices for free.
 
-## Features
+The server checks your Reddit inbox and sends a push notification when someone replies to you or mentions you. It also runs the AI features, like post and comment summaries and post filtering, using your own Groq or OpenAI API key.
 
-- 🔔 Reddit message monitoring with push notifications
-- 📱 Mobile app integration via Expo push notifications
-- 💳 Subscription management with RevenueCat
-- 🤖 AI-powered features using Groq API
-- 📊 Admin dashboard for monitoring and management
-- 🗄️ SQLite database with Drizzle ORM
-- ⚡ Built with Bun for fast performance
+## Setup with Docker
 
-## Setup Instructions
-
-There are two ways to set up the server: **Docker Compose** or **Manual Setup**.
-
----
-
-### Docker Compose Setup
-
-This method uses Docker to build and run the application in a container without needing to clone the repository yourself.
-
-#### Prerequisites
-
-- [Docker](https://www.docker.com/get-started)
-- [Docker Compose](https://docs.docker.com/compose/install/)
-
-#### 1. Create the `compose.yaml` file
-
-Copy the [`compose.yaml`](compose.yaml) file or the following codeblock below:
-
-```yaml
-services:
-  hydra-server:
-    build:
-      context: https://github.com/dmilin1/hydra-server.git
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./config:/app/config
-      - ./data:/data
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - IS_CUSTOM_SERVER=true
-```
-
-#### 2. Create the .env file
-
-```env
-# Get your API key from https://console.groq.com/keys
-GROQ_API_KEY=your_groq_api_key_here
-# Generate a key with `openssl rand -hex 32`
-ENCRYPTION_KEY=your_32_byte_encryption_key_here
-# Set a strong password to access the dashboard
-DASHBOARD_PASSWORD=your_secure_dashboard_password
-IS_CUSTOM_SERVER=true
-```
-
-#### Environment Variables
-
-| Variable           | Default Value | Remarks                                                                                                 |
-| ------------------ | ------------- | ------------------------------------------------------------------------------------------------------- |
-| GROQ_API_KEY       | ---           | GROQ API Key for AI features. Only needed if AI_PROVIDER is "groq" (optional)                           |
-| ENCRYPTION_KEY     | ---           | Generate with `openssl rand -hex 32` (required)                                                         |
-| DASHBOARD_PASSWORD | ---           | Password to access dashboard (required)                                                                 |
-| IS_CUSTOM_SERVER   | ---           | Must be set to true for self hosted server (required)                                                   |
-| AI_PROVIDER        | groq          | Specify the AI provider to use for post/comments summary, database query and posts filtering (optional) |
-
-Below environment variables need to be set only if `AI_PROVIDER` is set to `openai`
-
-| Variable             | Default Value               | Remarks                                                               |
-| -------------------- | --------------------------- | --------------------------------------------------------------------- |
-| OPENAI_BASE_URL      | `https://api.openai.com/v1` | Base URL for OpenAI.                                                  |
-| OPENAI_API_KEY       | ---                         | OpenAI API key. (optional)                                            |
-| OPENAI_SUMMARY_MODEL | gpt-4.1-mini                | Model used for posts/comments summary. Must be supported by provider. |
-| OPENAI_QUERY_MODEL   | gpt-4.1-mini                | Model used for database query. Must be supported by provider.         |
-| OPENAI_FILTER_MODEL  | gpt-4.1-mini                | Model used for posts filtering. Must be supported by provider.        |
-
----
-
-### Manual Setup
-
-#### 1. Clone the Repository
+You need Docker with Compose. You don't need to clone this repo, since the compose file builds the image straight from GitHub.
 
 ```bash
-git clone https://github.com/dmilin1/hydra-server.git
-cd hydra-server
+mkdir hydra-server && cd hydra-server
+curl -fsSLO https://raw.githubusercontent.com/dmilin1/hydra-server/main/compose.yaml
+curl -fsSL -o .env https://raw.githubusercontent.com/dmilin1/hydra-server/main/.env.example
 ```
 
-#### 2. Install Dependencies
+Open `.env` and set these:
 
-Install backend and frontend dependencies:
+- `ENCRYPTION_KEY`: run `openssl rand -hex 32` and paste the output. Save a copy somewhere. The server encrypts your Reddit sessions with it, and if you change it the stored sessions can't be read.
+- `GROQ_API_KEY`: get one at <https://console.groq.com/keys>. To use OpenAI or another OpenAI-compatible API instead, see [Configuration](#configuration).
+- `DASHBOARD_PASSWORD` (optional): turns on the admin page at `/admin`. It has to be at least 16 characters.
+
+Then start it:
 
 ```bash
-bun install
-cd frontend
-bun install
-cd ..
+docker compose up -d
+curl http://localhost:3000/healthz
 ```
 
-### Environment Configuration
+If the health check returns `{"ok":true,...}`, it's running. `docker compose logs -f` shows the logs. Your data lives in `./data`.
 
-Create a `.env` file in the root directory with the following variables:
+## Connecting the app
 
-```env
-# Get your API key from https://console.groq.com/keys
-GROQ_API_KEY=your_groq_api_key_here
-# Generate a key with `openssl rand -hex 32`
-ENCRYPTION_KEY=your_32_byte_encryption_key_here
-# Set a strong password to access the dashboard
-DASHBOARD_PASSWORD=your_secure_dashboard_password
+In Hydra, go to Settings > Advanced, turn on Use Custom Server under Self Hosted Hydra Server, and enter your server's URL. Once the app says the server checks out, restart the app.
 
-IS_CUSTOM_SERVER=true
-```
+Your phone has to be able to reach the server when you use the app. Notifications are delivered through Expo's push service, so those still arrive when you're away from home.
 
-#### 4. Build the Frontend
+Anyone who can reach your server can use it, including the AI features on your API key. The easiest way to use it away from home is a VPN like [Tailscale](https://tailscale.com) or WireGuard. If you put it on the public internet instead, put it behind a reverse proxy with HTTPS and set `TRUST_PROXY=1` so rate limits see real client addresses.
+
+## Updating
 
 ```bash
-cd frontend
-bun run build
-cd ..
+docker compose up -d --build
 ```
 
-#### 5. Running the Server
+If an update changes the database, the server backs it up before applying the change.
+
+## Backups
+
+The server writes a backup to `data/sqlite.db.daily.bak` once a day. It also writes `data/sqlite.db.pre-<migration>.bak` before an update changes the database, and keeps the last three.
+
+To restore the daily backup:
 
 ```bash
+docker compose down
+mkdir -p data/aside
+mv data/sqlite.db data/sqlite.db-wal data/sqlite.db-shm data/aside/
+cp data/sqlite.db.daily.bak data/sqlite.db
+docker compose up -d
+```
+
+It's fine if `mv` complains that the `-wal` or `-shm` file doesn't exist. Just don't leave them next to the restored file.
+
+Backups contain your Reddit sessions, encrypted with `ENCRYPTION_KEY`. Keep the key somewhere other than the backups.
+
+## Running without Docker
+
+You need [Bun](https://bun.sh) 1.4.
+
+```bash
+git clone https://github.com/dmilin1/hydra-server.git && cd hydra-server
+bun install --production
+cp .env.example .env
 bun run start
 ```
 
-The server will start on `http://localhost:3000`.
+Edit `.env` the same way as above before starting. The database is created at `./sqlite.db` unless you set `DATABASE_PATH`.
 
-### Accessing the Dashboard
+## Configuration
 
-Once the server is running (either via Docker or manually), open your browser and navigate to `http://localhost:3000`. You'll be prompted to enter the dashboard password you set in your `.env` file.
+Settings go in `.env`. If one is invalid, the server won't start and the log tells you which.
 
-### Connecting to Hydra App
+| Variable | What it does |
+| --- | --- |
+| `ENCRYPTION_KEY` | Required. 64 hex characters, from `openssl rand -hex 32`. |
+| `GROQ_API_KEY` | Key for the AI features when `AI_PROVIDER` is `groq` (the default). |
+| `AI_PROVIDER` | `groq` or `openai`. |
+| `OPENAI_API_KEY` | Key for the AI features when `AI_PROVIDER` is `openai`. The in-app guide search always uses OpenAI, so it needs this key either way. |
+| `OPENAI_BASE_URL` | Point `openai` at any OpenAI-compatible server, such as a local model. |
+| `TYPESAFE_AI_API_KEY` | Optional. Post filtering uses [TypeSafe AI](https://typesafe.ai)'s Jev model instead of `AI_PROVIDER`, and follows the app's filter sensitivity. |
+| `DASHBOARD_PASSWORD` | Turns on `/admin`. At least 16 characters. |
+| `WEBSHARE_TOKEN` | Sends Reddit requests through [Webshare](https://www.webshare.io) proxies instead of your own IP. |
+| `DISCORD_WEBHOOK_URL` | Posts to a Discord channel when something goes wrong. |
+| `TRUST_PROXY` | Set to `1` behind a reverse proxy. |
+| `POLL_INTERVAL_MS` | How often each inbox is checked. Defaults to `120000` (2 minutes). |
+| `PORT` | Defaults to `3000`. |
 
-Navigate to Settings => Advanced => Use Custom Server. Enable it and enter the public IP or domain where you are hosting the server. If hosted at home, you will likely need to set up a reverse proxy or port forwarding for port 3000. For example: `http://your_public_ip:3000`.
+[`.env.example`](.env.example) lists the rest.
 
-### Enable auto-start on Boot
+## Pull requests
 
-If running on a debian distro the following commands allow the server to auto run on startup:
+Bug fixes are welcome.
 
-Create a systemd service file
+Please don't send changes that only make the server fit your own setup, like support for a different database, another hosting platform, or a new option for your environment. I can't maintain every setup people run. If you need something like that, fork the project and make it your own.
 
-```bash
-sudo nano /etc/systemd/system/hydra-server.service
-```
+## License
 
-Enter the following code into the service:
-
-```bash
-[Unit]
-Description=Hydra Server Bun Script
-After=network.target
-
-[Service]
-User=pi
-WorkingDirectory=/home/pi/hydra-server
-ExecStart=/home/pi/.bun/bin/bun run start
-Restart=always
-RestartSec=5
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/pi/.bun/bin
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then reload and enable the service:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable hydra-server.service
-```
-
-Then run the following to start and check the service:
-
-```bash
-sudo systemctl start hydra-server.service
-sudo systemctl status hydra-server.service
-```
-
-The service should now auto-start on boot.
+Hydra Server is licensed under the [GNU AGPL v3](LICENSE), the same license as the Hydra app.

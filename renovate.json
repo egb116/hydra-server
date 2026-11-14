@@ -1,0 +1,62 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "rangeStrategy": "pin",
+  "minimumReleaseAge": "3 days",
+  "schedule": ["before 6am on monday"],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": true
+  },
+  "osvVulnerabilityAlerts": true,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^0/",
+      "groupName": "minor and patch updates",
+      "automerge": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pinDigest"],
+      "groupName": "github actions",
+      "automerge": true
+    },
+    {
+      "matchPackageNames": ["bun", "oven/bun", "@types/bun"],
+      "groupName": "bun",
+      "automerge": false
+    },
+    {
+      "matchPackageNames": ["bun", "oven/bun", "@types/bun"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt"],
+      "groupName": "oxc tooling"
+    },
+    {
+      "description": "Below 1.0 a patch is still a fix, so these merge on their own too.",
+      "matchCurrentVersion": "/^0/",
+      "matchUpdateTypes": ["patch"],
+      "groupName": "minor and patch updates",
+      "automerge": true
+    },
+    {
+      "description": "No breaking updates. Majors are done by hand when a new feature is needed.",
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Below 1.0 a minor version can break things, so it counts as a major.",
+      "matchCurrentVersion": "/^0/",
+      "matchUpdateTypes": ["minor"],
+      "enabled": false
+    }
+  ]
+}
