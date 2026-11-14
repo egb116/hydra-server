@@ -97,7 +97,6 @@ export function rollbackInstructions(path: string): string[] {
     "To roll back to v1: stop v2 first, then run",
     `  mkdir -p ${aside} && mv ${path} ${path}-wal ${path}-shm ${aside}/ ; mv ${oldPath} ${path}`,
     "(a missing -wal/-shm is fine), then deploy v1. Never rename _old while v2's -wal/-shm are still next to it.",
-    "Docker Compose self-host: set the compose build context to https://github.com/dmilin1/hydra-server.git#last-v1 and run `docker compose up -d --build`.",
   ];
 }
 
