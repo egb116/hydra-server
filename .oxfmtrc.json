@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "ignorePatterns": [
+    "node_modules/",
+    "dist/",
+    "src/db/migrations/",
+    "tests/fixtures/",
+    "bun.lock",
+    "README.md",
+    "*.yaml",
+    "*.yml",
+    "fly.toml",
+    "Dockerfile"
+  ]
+}

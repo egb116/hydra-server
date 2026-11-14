@@ -1,0 +1,45 @@
+# Deploys the official server to Fly.io after CI passes on a push to main.
+#
+# Off until you turn it on. To turn it on:
+#   1. Create a deploy token: fly tokens create deploy -x 8760h
+#   2. Add it as the repository secret FLY_API_TOKEN.
+#   3. Add the repository variable FLY_AUTO_DEPLOY with the value true.
+# To turn it off again, delete the variable or set it to anything else.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel one halfway through.
+concurrency:
+  group: deploy-fly
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Fly
+    if: >-
+      vars.FLY_AUTO_DEPLOY == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The commit CI tested, not whatever main points at by now.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@v1
+
+      - name: Deploy
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

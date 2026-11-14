@@ -1,26 +1,61 @@
-# fly.toml app configuration file generated for hydra-server on 2025-04-28T19:13:16-07:00
+# Fly.io configuration for the official Hydra server (https://api.hydraapp.io).
+# Reference: https://fly.io/docs/reference/configuration/
 #
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+# ONE MACHINE, ON PURPOSE. The server is a single process with SQLite on the `storage`
+# volume, and the poller leases accounts in that one database. A second machine would get
+# its own empty volume and a split brain, so never `fly scale count` above 1 and never
+# clone this machine. Deploys replace the machine in place (stop, then start), so expect a
+# short gap in service.
 #
+# Secrets (ENCRYPTION_KEY, REVENUECAT_*, WEBSHARE_TOKEN, ...) are set with `fly secrets set`,
+# never here. Fly sets FLY_APP_NAME, which makes TRUST_PROXY default to `fly`.
 
 app = 'hydra-server'
 primary_region = 'iad'
 
+# The server drains on SIGTERM under a 25 s deadline (src/main.ts); give it 30 s before SIGKILL.
+kill_signal = 'SIGTERM'
+kill_timeout = 30
+
 [build]
+
+[env]
+  # The default anyway; explicit so a stray IS_CUSTOM_SERVER=true can't flip it to selfhost.
+  HYDRA_MODE = 'official'
 
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = 'stop'
+  # Never stop the machine: the poller and jobs must run with no inbound traffic.
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
   processes = ['app']
+
+  # Count requests, not connections, and allow far more than Fly's defaults (20/25):
+  # AI calls hold a request open for seconds, and there is only one machine to send them to.
+  [http_service.concurrency]
+    type = 'requests'
+    soft_limit = 400
+    hard_limit = 500
+
+  # GET /healthz: SELECT 1, the poller heartbeat and each module's health; 200 or 503.
+  # The grace period covers the one-time v1 import and migrations, which run before listening.
+  [[http_service.checks]]
+    grace_period = '120s'
+    interval = '15s'
+    timeout = '5s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
   memory = '2gb'
   cpu_kind = 'performance'
   cpus = 1
 
+# /data holds sqlite.db, its -wal/-shm, the pre-migration and daily backups, and (after the
+# v1 transition) sqlite.db_old. The image's entrypoint hands it to uid 1000 (the `bun` user
+# the server runs as) on every start, so a root-owned or fresh volume is fine.
 [mounts]
-  source = "storage"
-  destination = "/data"
+  source = 'storage'
+  destination = '/data'

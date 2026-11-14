@@ -1,0 +1,44 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "rangeStrategy": "pin",
+  "minimumReleaseAge": "3 days",
+  "schedule": ["before 6am on monday"],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": true
+  },
+  "osvVulnerabilityAlerts": true,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchCurrentVersion": "!/^0/",
+      "groupName": "minor and patch updates",
+      "automerge": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pinDigest"],
+      "groupName": "github actions",
+      "automerge": true
+    },
+    {
+      "matchPackageNames": ["bun", "oven/bun", "@types/bun"],
+      "groupName": "bun",
+      "automerge": false
+    },
+    {
+      "matchPackageNames": ["bun", "oven/bun", "@types/bun"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt"],
+      "groupName": "oxc tooling"
+    }
+  ]
+}

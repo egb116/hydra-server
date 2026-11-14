@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint, format, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint (oxlint --type-aware --deny-warnings)
+        run: bun run lint
+
+      - name: Format check (oxfmt --check)
+        run: bun run format:check
+
+      - name: Test
+        run: bun test
+
+  docker:
+    name: Docker build
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: hydra-server:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Boots the built image in selfhost mode (no upstream credentials needed) on a root-owned
+      # bind mount holding a root-owned file, like an upgraded v1 ./data or a fresh Fly volume.
+      # The entrypoint must hand it to uid 1000 and drop privileges before the server starts.
+      - name: Smoke test the image
+        run: |
+          data="$RUNNER_TEMP/hydra-data"
+          sudo install -d -o root -g root -m 0755 "$data"
+          sudo touch "$data/root-owned-leftover"
+          docker run -d --name hydra-smoke -p 3000:3000 \
+            -v "$data:/data" \
+            -e HYDRA_MODE=selfhost \
+            -e ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+            hydra-server:ci
+          ok=""
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/healthz; then ok=1; break; fi
+            sleep 1
+          done
+          echo
+          if [ -z "$ok" ]; then docker logs hydra-smoke; exit 1; fi
+          test "$(curl -fsS http://127.0.0.1:3000/api/status)" = "Hydra server is up"
+          # PID 1 (the server) runs as uid 1000, not root. /proc/<pid> is owned by its euid.
+          test "$(docker exec hydra-smoke stat -c %u:%g /proc/1)" = "1000:1000"
+          test -f "$data/sqlite.db"
+          test "$(stat -c %u "$data")" = "1000"
+          test "$(stat -c %u "$data/sqlite.db")" = "1000"
+          test "$(stat -c %u "$data/root-owned-leftover")" = "1000"
+
+      # Started as non-root on a root-owned directory, the entrypoint can't chown, so it must
+      # exit with a message naming the fix instead of a raw SQLite error.
+      - name: Smoke test a non-root start on an unwritable /data
+        run: |
+          data="$RUNNER_TEMP/hydra-data-ro"
+          sudo install -d -o root -g root -m 0755 "$data"
+          set +e
+          out="$(docker run --rm --user 1000:1000 -v "$data:/data" \
+            -e HYDRA_MODE=selfhost -e ENCRYPTION_KEY="$(openssl rand -hex 32)" \
+            hydra-server:ci 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" = "1"
+          echo "$out" | grep -q "is not writable by uid 1000"
+
+      - name: Container logs
+        if: always()
+        run: docker logs hydra-smoke || true
