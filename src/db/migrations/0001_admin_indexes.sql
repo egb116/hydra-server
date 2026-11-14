@@ -1,0 +1,2 @@
+CREATE INDEX `ai_usage_monthly_month_cost_idx` ON `ai_usage_monthly` (`month`,`cost_usd`);--> statement-breakpoint
+CREATE INDEX `reddit_accounts_last_error_at_idx` ON `reddit_accounts` (`last_error_at`);

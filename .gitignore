@@ -36,3 +36,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 sqlite.db
 sqlite.db-shm
 sqlite.db-wal
+# self-host data, backups and v1 rollback copies
+data/
+*.bak
+sqlite.db_old*
