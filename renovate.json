@@ -39,6 +39,24 @@
     {
       "matchPackageNames": ["oxlint", "oxlint-tsgolint", "oxfmt"],
       "groupName": "oxc tooling"
+    },
+    {
+      "description": "Below 1.0 a patch is still a fix, so these merge on their own too.",
+      "matchCurrentVersion": "/^0/",
+      "matchUpdateTypes": ["patch"],
+      "groupName": "minor and patch updates",
+      "automerge": true
+    },
+    {
+      "description": "No breaking updates. Majors are done by hand when a new feature is needed.",
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Below 1.0 a minor version can break things, so it counts as a major.",
+      "matchCurrentVersion": "/^0/",
+      "matchUpdateTypes": ["minor"],
+      "enabled": false
     }
   ]
 }
