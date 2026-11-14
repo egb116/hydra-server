@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   sync:
@@ -33,17 +32,19 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit $status
 
-      - name: Open an issue if the merge failed
+      - name: Explain the failure in the job summary
         if: failure() && steps.merge.outcome == 'failure'
         env:
-          GH_TOKEN: ${{ github.token }}
           OUTPUT: ${{ steps.merge.outputs.output }}
         run: |
-          title="Upstream sync needs attention"
-          existing=$(gh issue list -R "${{ github.repository }}" --state open --search "in:title \"$title\"" --json number -q '.[0].number')
-          body=$(printf 'The daily merge from dmilin1/hydra-server failed.\n\n```\n%s\n```\n\nIf upstream changed files under .github/workflows, GitHub does not let the Actions token push them: press **Sync fork** on the repo page instead. If there is a merge conflict, merge `upstream/main` locally and resolve it.\n\nRun: %s/%s/actions/runs/%s' "$OUTPUT" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}")
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" -R "${{ github.repository }}" --body "$body"
-          else
-            gh issue create -R "${{ github.repository }}" --title "$title" --body "$body"
-          fi
+          {
+            echo "## Upstream sync failed"
+            echo
+            echo "The daily merge from dmilin1/hydra-server failed:"
+            echo
+            echo '```'
+            echo "$OUTPUT"
+            echo '```'
+            echo
+            echo "If upstream changed files under \`.github/workflows\`, GitHub does not let the Actions token push them: press **Sync fork** on the repo page instead. If there is a merge conflict, merge \`upstream/main\` locally and resolve it."
+          } >> "$GITHUB_STEP_SUMMARY"
